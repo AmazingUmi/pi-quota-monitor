@@ -26,6 +26,13 @@ export function groupWindow(usage: AntigravityQuota | undefined, kind: "gemini" 
   return { label: lowest.modelId, remainingPercent: lowest.remainingPercent!, resetAt: lowest.resetAt };
 }
 
+function geminiTimedWindow(usage: AntigravityQuota | undefined, kind: "fiveHour" | "weekly"): QuotaWindow | undefined {
+  const windows = usage?.groups.filter((group) => /gemini/i.test(group.name)).flatMap((group) => group.windows) ?? [];
+  const pattern = kind === "fiveHour" ? /(?:\b5\s*[- ]?h\b|\b5\s*[- ]?hours?\b|\bfive\s*[- ]?hours?\b)/i : /week/i;
+  const matched = windows.filter((window) => pattern.test(window.label));
+  return matched.length ? matched.reduce((lowest, window) => window.remainingPercent < lowest.remainingPercent ? window : lowest) : undefined;
+}
+
 function percentage(value: number | undefined): string {
   return value === undefined ? "?" : `${Math.round(value)}%`;
 }
@@ -37,12 +44,13 @@ export function formatStatus(
   showReset: boolean,
   now = Date.now(),
 ): string {
-  const gemini = groupWindow(antigravity.value, "gemini");
-  const shared = groupWindow(antigravity.value, "shared");
+  const geminiFiveHour = geminiTimedWindow(antigravity.value, "fiveHour");
+  const geminiWeekly = geminiTimedWindow(antigravity.value, "weekly");
   const codexReset = showReset ? countdown(codex.value?.fiveHour?.resetAt, now) : undefined;
+  const geminiReset = showReset ? countdown(geminiFiveHour?.resetAt, now) : undefined;
   return [
     `OAI ${percentage(codex.value?.fiveHour?.remainingPercent)}/${percentage(codex.value?.weekly?.remainingPercent)}${codexReset ? ` ↻${codexReset}` : ""}`,
-    `AGY G${percentage(gemini?.remainingPercent)} C${percentage(shared?.remainingPercent)}`,
+    `AGY ${percentage(geminiFiveHour?.remainingPercent)}/${percentage(geminiWeekly?.remainingPercent)}${geminiReset ? ` ↻${geminiReset}` : ""}`,
     `↑${compactTokens(totals.input)} ↓${compactTokens(totals.output)}`,
   ].join(" | ");
 }
@@ -70,8 +78,8 @@ export function formatDetails(
   ];
   if (codexResult) lines.push(`Codex updated ${new Date(codexResult.capturedAt).toLocaleString()}`);
   if (agy) lines.push(`Antigravity updated ${new Date(agy.capturedAt).toLocaleString()}`);
-  if (codex.error) lines.push(`Codex: ${codex.error} (showing last successful result)`);
-  if (antigravity.error) lines.push(`Antigravity: ${antigravity.error} (showing last successful result)`);
+  if (codex.error) lines.push(`Codex: ${codex.error}${codexResult ? " (showing last successful result)" : ""}`);
+  if (antigravity.error) lines.push(`Antigravity: ${antigravity.error}${agy ? " (showing last successful result)" : ""}`);
   if (agy?.summaryError) lines.push(agy.summaryError);
   return lines.join("\n");
 }

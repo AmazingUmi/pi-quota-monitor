@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import { QuotaDashboard } from "./dashboard.js";
-import { queryAntigravityQuota } from "./providers/antigravity.js";
+import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
 import { RefreshScheduler } from "./scheduler.js";
 import { formatDetails, formatStatus } from "./statusline.js";
@@ -16,6 +16,8 @@ function safeFailure(error: unknown): string {
   // Never display provider response bodies, authorization headers, or error messages containing secrets.
   if (error instanceof Error && error.message === "Codex credential belongs to a custom endpoint.") return error.message;
   if (error instanceof Error && /credentials unavailable|credential unavailable|Invalid Antigravity provider credential/i.test(error.message)) return "Not logged in";
+  if (error instanceof Error && error.message === "agy binary unavailable.") return "agy executable unavailable";
+  if (error instanceof Error && error.message === "agy usage timed out.") return "agy native query timed out";
   return "Query failed; retry later";
 }
 
@@ -84,10 +86,17 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           codex.value = result;
           codex.error = undefined;
         } else {
-          const key = await ctx.modelRegistry.getApiKeyForProvider(provider);
+          const localAgy = ctx.modelRegistry.getProvider(provider)?.baseUrl?.startsWith("agy://") ?? false;
+          // Local agy uses a sentinel API key, not an OAuth credential. Its own
+          // /usage command reads the logged-in agy session instead.
+          const key = localAgy ? undefined : await ctx.modelRegistry.getApiKeyForProvider(provider);
           if (!live(epoch)) return;
-          if (!key) throw new Error("Antigravity credential unavailable");
-          const result = await queryAntigravityQuota(key, signal, timeoutMs);
+          if (!localAgy && !key) throw new Error("Antigravity credential unavailable");
+          const result = localAgy || key === "agy-local-session"
+            // agy starts a separate backend for /usage; startup + quota refresh can
+            // exceed a minute even when the interactive TUI already has data.
+            ? await queryNativeAntigravityQuota(signal, Math.max(timeoutMs, 120_000))
+            : await queryAntigravityQuota(key!, signal, timeoutMs);
           if (!live(epoch)) return;
           antigravity.value = result;
           antigravity.error = undefined;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseCodexQuota, queryCodexQuota } from "../src/providers/codex.js";
-import { parseAntigravityQuota, queryAntigravityQuota } from "../src/providers/antigravity.js";
+import { parseAntigravityQuota, parseNativeAntigravityQuota, queryAntigravityQuota } from "../src/providers/antigravity.js";
 import { emptyTotals, tokenRecord } from "../src/tokens/collector.js";
 import { formatStatus, groupWindow } from "../src/statusline.js";
 import { normalizeConfig } from "../src/config.js";
@@ -40,6 +40,22 @@ describe("Codex", () => {
 });
 
 describe("Antigravity", () => {
+  it("parses agy's native /usage result with snake-case buckets and reset times", () => {
+    const result = parseNativeAntigravityQuota(JSON.stringify({ event: "result", result: {
+      status: "SUCCESS", command: { name: "usage", data: { groups: [
+        { name: "Gemini", buckets: [
+          { id: "5h", name: "5h limit remaining", remaining_fraction: 0.82, reset_time: "2026-06-01T13:00:00Z" },
+          { id: "weekly", name: "Weekly limit remaining", remaining_fraction: 0.6 },
+        ] },
+        { name: "Claude/GPT", buckets: [{ id: "5h", name: "5h", remaining_fraction: 0.67 }] },
+      ] } },
+    } }), now);
+    expect(groupWindow(result, "gemini")?.remainingPercent).toBe(60);
+    expect(result.groups[0]?.windows[0]?.resetAt).toBe(Date.parse("2026-06-01T13:00:00Z"));
+    expect(groupWindow(result, "shared")?.remainingPercent).toBe(67);
+    expect(() => parseNativeAntigravityQuota(JSON.stringify({ status: "FAILED", error: "sensitive upstream text" }))).toThrow("agy usage command failed");
+    expect(() => parseNativeAntigravityQuota(JSON.stringify({ command: { name: "usage", data: { groups: [] } } }))).toThrow("no quota groups");
+  });
   it("prefers paid tier and falls back to per-model percentages if aggregate summary is unavailable", () => {
     const result = parseAntigravityQuota(
       { currentTier: { name: "Free" }, paidTier: { name: "Google AI Pro" } },
@@ -55,7 +71,7 @@ describe("Antigravity", () => {
     expect(groupWindow(result, "shared")?.remainingPercent).toBe(67);
     expect(result.models).toHaveLength(2);
     expect(result.summaryError).toBe("Summary unavailable");
-    expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY G84% C67%");
+    expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY ?/?");
   });
 
   it("uses aggregate groups when present and keeps the restrictive bucket", () => {
@@ -68,6 +84,19 @@ describe("Antigravity", () => {
     ] }, undefined, now);
     expect(groupWindow(result, "gemini")?.remainingPercent).toBe(60);
     expect(groupWindow(result, "shared")?.remainingPercent).toBe(67);
+    expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY 80%/60%");
+  });
+
+  it("shows Gemini 5h/weekly quotas and the 5h reset, without the Claude/GPT value", () => {
+    const result = parseNativeAntigravityQuota(JSON.stringify({ command: { name: "usage", data: { groups: [
+      { name: "Gemini Models", buckets: [
+        { name: "Weekly Limit Remaining", remaining_fraction: 0.8291 },
+        { name: "Five Hour Limit Remaining", remaining_fraction: 0.9538, reset_time: new Date(now + 137 * 60_000).toISOString() },
+      ] },
+      { name: "Claude and GPT models", buckets: [{ name: "Weekly Limit Remaining", remaining_fraction: 1 }] },
+    ] } } }), now);
+    expect(formatStatus({}, { value: result }, emptyTotals(), true, now)).toContain("AGY 95%/83% ↻2h17m");
+    expect(formatStatus({}, { value: result }, emptyTotals(), false, now)).toContain("AGY 95%/83% | ");
   });
 
   it("uses only official Cloud Code Assist endpoints with redirect protection", async () => {
@@ -108,7 +137,7 @@ it("counts reasoning as part of output and preserves last success in the status"
   expect(record?.reasoning).toBe(12000);
   expect(record?.totalTokens).toBe(321300);
   expect(formatStatus({ value: { capturedAt: now, fiveHour: { label: "5h", remainingPercent: 73 }, weekly: { label: "weekly", remainingPercent: 61 } }, error: "Query failed" }, {}, record!, false))
-    .toBe("OAI 73%/61% | AGY G? C? | ↑284k ↓37k");
+    .toBe("OAI 73%/61% | AGY ?/? | ↑284k ↓37k");
 });
 
 it("bounds user-configurable refresh interval", () => {

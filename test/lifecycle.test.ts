@@ -13,9 +13,13 @@ vi.mock("../src/providers/codex.js", () => ({
   queryCodexQuota: vi.fn(async () => ({ capturedAt: Date.now(), fiveHour: { label: "5h", remainingPercent: 73 }, weekly: { label: "weekly", remainingPercent: 61 } })),
 }));
 vi.mock("../src/providers/antigravity.js", () => ({
-  queryAntigravityQuota: vi.fn(async () => ({ capturedAt: Date.now(), groups: [], models: [
-    { modelId: "gemini-test", remainingPercent: 84 }, { modelId: "claude-test", remainingPercent: 67 },
-  ] })),
+  queryAntigravityQuota: vi.fn(async () => ({ capturedAt: Date.now(), groups: [
+    { name: "Gemini", windows: [{ label: "5h", remainingPercent: 84 }, { label: "Weekly", remainingPercent: 67 }] },
+  ], models: [] })),
+  queryNativeAntigravityQuota: vi.fn(async () => ({ capturedAt: Date.now(), groups: [
+    { name: "Gemini", windows: [{ label: "5h", remainingPercent: 84 }, { label: "Weekly", remainingPercent: 67 }] },
+    { name: "Claude/GPT", windows: [{ label: "weekly", remainingPercent: 100 }] },
+  ], models: [] })),
 }));
 
 const cleanup: Array<() => void> = [];
@@ -42,8 +46,8 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   const fire = async (name: string, event = {}) => handlers.get(name)?.(event, ctx);
   cleanup.push(() => { void fire("session_shutdown"); });
   await fire("session_start");
-  expect(statuses[0]).toContain("OAI ?/? | AGY G? C?");
-  await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | AGY G84% C67%"));
+  expect(statuses[0]).toContain("OAI ?/? | AGY ?/?");
+  await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | AGY 84%/67%"));
   await fire("message_end", { message: {
     role: "assistant", provider: "openai-codex", model: "gpt", timestamp: Date.now(), stopReason: "stop",
     usage: { input: 100, output: 20, reasoning: 10, cacheRead: 5, cacheWrite: 3, totalTokens: 128 },
@@ -52,6 +56,36 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   await fire("session_shutdown");
   cleanup.pop();
   expect(statuses.at(-1)).toBeUndefined();
+});
+
+it("queries the local agy provider natively without treating its sentinel as OAuth JSON", async () => {
+  const { queryNativeAntigravityQuota, queryAntigravityQuota } = await import("../src/providers/antigravity.js");
+  vi.mocked(queryNativeAntigravityQuota).mockClear();
+  vi.mocked(queryAntigravityQuota).mockClear();
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  const statuses: string[] = [];
+  quotaMonitor({
+    on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
+    registerCommand() {},
+  } as unknown as ExtensionAPI);
+  const getApiKeyForProvider = vi.fn(async () => "agy-local-session");
+  const ctx = {
+    hasUI: true,
+    ui: { setStatus: (_key: string, text?: string) => { if (text) statuses.push(text); }, notify: vi.fn() },
+    sessionManager: { getBranch: () => [] },
+    modelRegistry: {
+      getProvider: (provider: string) => ({ baseUrl: provider === "antigravity" ? "agy://local-stream-json" : "https://chatgpt.com/backend-api" }),
+      getProviderAuth: async () => undefined, getApiKeyForProvider,
+    },
+  } as unknown as ExtensionContext;
+  const fire = async (name: string) => handlers.get(name)?.({}, ctx);
+  cleanup.push(() => { void fire("session_shutdown"); });
+  await fire("session_start");
+  await vi.waitFor(() => expect(statuses.at(-1)).toContain("AGY 84%/67%"));
+  expect(queryNativeAntigravityQuota).toHaveBeenCalledOnce();
+  expect(vi.mocked(queryNativeAntigravityQuota).mock.calls[0]?.[1]).toBe(120_000);
+  expect(queryAntigravityQuota).not.toHaveBeenCalled();
+  expect(getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
 it("opens the console in RPC mode, hides only its own footer status, and releases the port", async () => {

@@ -67,7 +67,7 @@ function render() {
   row(providers, "5 小时", percent(codex.value?.fiveHour?.remainingPercent));
   row(providers, "每周", percent(codex.value?.weekly?.remainingPercent));
   if (codex.value?.capturedAt) row(providers, "最近成功查询", new Date(codex.value.capturedAt).toLocaleString());
-  notice(providers, codex.error ? `Codex：${codex.error}（保留上次成功结果）` : "");
+  notice(providers, codex.error ? `Codex：${codex.error}${codex.value ? "（保留上次成功结果）" : ""}` : "");
   title(providers, `Antigravity${agy.value?.plan ? ` · ${agy.value.plan}` : ""}`);
   for (const group of (agy.value?.groups ?? [])) {
     for (const window of group.windows) row(providers, `${group.name} · ${window.label}`, `${percent(window.remainingPercent)} · ${countdown(window.resetAt)}`);
@@ -78,7 +78,7 @@ function render() {
   }
   if (agy.value?.capturedAt) row(providers, "最近成功查询", new Date(agy.value.capturedAt).toLocaleString());
   notice(providers, agy.value?.summaryError);
-  notice(providers, agy.error ? `Antigravity：${agy.error}（保留上次成功结果）` : "");
+  notice(providers, agy.error ? `Antigravity：${agy.error}${agy.value ? "（保留上次成功结果）" : ""}` : "");
   const tokens = $("tokens");
   tokens.replaceChildren();
   for (const [name, value] of [["当前会话", latest.session], ["今日", latest.daily]]) {
