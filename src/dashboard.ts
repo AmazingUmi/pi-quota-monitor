@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { UsageSummary } from "./tokens/aggregate.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
 
 export interface DashboardState {
   codex: ProviderCache<CodexQuota>;
   antigravity: ProviderCache<AntigravityQuota>;
-  session: TokenTotals;
-  daily: TokenTotals;
+  usage: UsageSummary;
+  session: { costUsd: number | null; context: { tokens: number | null; contextWindow: number; percent: number | null } | null };
   config: MonitorConfig;
   updatedAt: number;
 }
@@ -20,6 +21,10 @@ export interface DashboardActions {
 }
 
 const HOST = "127.0.0.1";
+function publicTotals(totals: TokenTotals): TokenTotals {
+  const { input, output, reasoning, cacheRead, cacheWrite, totalTokens } = totals;
+  return { input, output, reasoning, cacheRead, cacheWrite, totalTokens };
+}
 const SECURITY_HEADERS = {
   "Cache-Control": "no-store",
   "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -117,7 +122,22 @@ export class QuotaDashboard {
       } else if (pathname === "/style.css") {
         reply(res, 200, assets.style.toString("utf8"), "text/css; charset=utf-8");
       } else if (pathname === "/api/state") {
-        reply(res, 200, JSON.stringify({ ...this.actions.state(), control: this.nonce }));
+        const { codex, antigravity, usage, session, config, updatedAt } = this.actions.state();
+        const summary = {
+          totals: publicTotals(usage.totals),
+          models: usage.models.map(({ provider, model, ...totals }) => ({ provider, model, ...publicTotals(totals) })),
+          records: usage.records, invalidRecords: usage.invalidRecords,
+          timeline: {
+            hours: usage.timeline.hours.map(({ bucket, provider, model, totalTokens }) => ({ bucket, provider, model, totalTokens })),
+            days: usage.timeline.days.map(({ bucket, provider, model, totalTokens }) => ({ bucket, provider, model, totalTokens })),
+            today: usage.timeline.today, currentHour: usage.timeline.currentHour,
+          },
+          updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
+        };
+        reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary, session: {
+          costUsd: session.costUsd,
+          context: session.context ? { tokens: session.context.tokens, contextWindow: session.context.contextWindow, percent: session.context.percent } : null,
+        }, config: { refreshIntervalSeconds: config.refreshIntervalSeconds }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
       }

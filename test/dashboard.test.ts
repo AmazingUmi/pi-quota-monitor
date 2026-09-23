@@ -8,8 +8,10 @@ afterEach(async () => { await Promise.all(running.splice(0).map((dashboard) => d
 const state: DashboardState = {
   codex: { value: { capturedAt: 1000, fiveHour: { label: "5h", remainingPercent: 73 } } },
   antigravity: { error: "Query failed" },
-  session: { input: 100, output: 20, reasoning: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 120 },
-  daily: { input: 200, output: 40, reasoning: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 240 },
+  usage: { totals: { input: 200, output: 40, reasoning: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 240 }, models: [
+    { provider: "openai-codex", model: "gpt", input: 200, output: 40, reasoning: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 240 },
+  ], timeline: { hours: [], days: [], today: "2026-06-01", currentHour: 1780300800000 }, records: 1, invalidRecords: 0, updatedAt: Date.now(), stale: false },
+  session: { costUsd: 0.81, context: { tokens: 70720, contextWindow: 272000, percent: 26 } },
   config: { refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true },
   updatedAt: Date.now(),
 };
@@ -26,14 +28,38 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const page = await fetch(origin);
   expect(page.status).toBe(200);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
-  expect(await page.text()).toContain("额度控制台");
+  const html = await page.text();
+  expect(html).toContain("概览");
+  expect(html).toContain("Token 消耗趋势");
+  expect(html).toContain("chart-model");
+  expect(html).not.toContain("当前会话 Token");
+  expect(html).not.toContain("Cost");
+  const css = await (await fetch(`${origin}/style.css`)).text();
+  expect(css).toContain("prefers-color-scheme: dark");
+  expect(css).toContain("#245bce");
+  expect(css).toContain(".chart-line");
   const js = await fetch(`${origin}/client.js`);
   expect(js.status).toBe(200);
   expect(await js.text()).toContain("/api/refresh");
+  Object.assign(state.usage, { ledgerPath: "/secret/usage.jsonl", credential: "secret" });
+  Object.assign(state.usage.models[0], { ledgerPath: "/secret/usage.jsonl" });
+  state.usage.timeline.hours.push({ bucket: String(Date.now()), provider: "openai-codex", model: "gpt", totalTokens: 240 });
+  Object.assign(state.usage.timeline.hours[0], { ledgerPath: "/secret/usage.jsonl" });
+  Object.assign(state.session, { credential: "secret" });
   const result = await fetch(`${origin}/api/state`);
   const payload = await result.json() as DashboardState & { control: string };
   expect(payload.codex.value?.fiveHour?.remainingPercent).toBe(73);
+  expect(payload.usage.models[0]?.provider).toBe("openai-codex");
+  expect(payload.usage.totals.totalTokens).toBe(240);
+  expect(payload.usage.timeline.hours[0]).toEqual({ bucket: state.usage.timeline.hours[0].bucket, provider: "openai-codex", model: "gpt", totalTokens: 240 });
+  expect(payload.session).toEqual({ costUsd: 0.81, context: { tokens: 70720, contextWindow: 272000, percent: 26 } });
   expect(JSON.stringify(payload)).not.toContain("Bearer");
+  expect(JSON.stringify(payload)).not.toContain("daily");
+  expect(JSON.stringify(payload)).not.toContain("/usage-");
+  expect(JSON.stringify(payload)).not.toContain("/secret/");
+  expect(JSON.stringify(payload)).not.toContain("credential");
+  expect(Object.keys(payload.config)).toEqual(["refreshIntervalSeconds"]);
+  expect(Object.keys(payload.usage)).toEqual(["totals", "models", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
   const blocked = await fetch(`${origin}/api/refresh`, { method: "POST", headers: { Origin: "https://evil.example", "X-Quota-Control": payload.control } });
   expect(blocked.status).toBe(403);

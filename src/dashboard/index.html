@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
   <title>Pi Quota Console</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/client.js" defer></script>
@@ -11,21 +11,53 @@
 <body>
   <main class="shell">
     <header class="hero">
-      <div><p class="eyebrow">LOCAL · PI MONITOR</p><h1>额度控制台</h1><p class="subtitle">OpenAI Codex · Antigravity · Token 使用统计</p></div>
-      <div class="controls"><button id="refresh" type="button">立即刷新额度</button><span id="feedback" role="status" aria-live="polite"></span></div>
+      <div><p class="eyebrow">PI QUOTA MONITOR / CONSOLE</p><h1>概览</h1><p class="subtitle">查看剩余额度与本插件记录的全部模型 Token 用量。</p></div>
+      <div class="controls"><button id="refresh" type="button">刷新额度</button><span id="feedback" role="status" aria-live="polite"></span></div>
     </header>
-    <section class="summary" aria-label="额度概要">
-      <article class="card"><span class="label">Codex · 5 小时</span><strong id="codex-five">—</strong><span id="codex-five-reset" class="subtle">等待数据</span></article>
-      <article class="card"><span class="label">Codex · 每周</span><strong id="codex-week">—</strong><span id="codex-week-reset" class="subtle">等待数据</span></article>
-      <article class="card"><span class="label">Antigravity · Gemini</span><strong id="agy-gemini">—</strong><span id="agy-gemini-reset" class="subtle">等待数据</span></article>
-      <article class="card"><span class="label">Antigravity · Claude/GPT</span><strong id="agy-shared">—</strong><span id="agy-shared-reset" class="subtle">等待数据</span></article>
+
+    <section class="intro panel" aria-labelledby="intro-title">
+      <h2 id="intro-title">本地用量账本</h2>
+      <p>统计本插件启用后记录的所有日期，不包含启用前的历史。额度来自 Provider 缓存，手动刷新可重新查询。</p>
+      <p class="hint">费用是当前 Pi 会话已报告的估算花费，不是账户预算上限；上下文百分比是当前模型窗口占用。仅监听 127.0.0.1 · 不展示凭据 · Reasoning 属于 Output，不重复计入 Total tokens</p>
     </section>
-    <section class="panels" aria-label="用量详情">
+
+    <section class="overview" aria-label="Token 概览">
+      <article class="metric-card"><span>全部账本 Tokens</span><strong id="overview-tokens">—</strong></article>
+      <article class="metric-card"><span>当前会话费用（USD）</span><strong id="overview-cost">—</strong></article>
+      <article class="metric-card"><span>当前模型上下文</span><strong id="overview-context">—</strong><small id="overview-context-detail">等待数据</small></article>
+    </section>
+
+    <section class="section" aria-labelledby="quota-title">
+      <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>5 小时与每周窗口；未提供的数据以 — 表示。</p></div></div>
+      <div class="summary">
+        <article class="card"><span class="label">Codex · 5 小时</span><strong id="codex-five">—</strong><span id="codex-five-reset" class="subtle">等待数据</span></article>
+        <article class="card"><span class="label">Codex · 每周</span><strong id="codex-week">—</strong><span id="codex-week-reset" class="subtle">等待数据</span></article>
+        <article class="card"><span class="label">Antigravity · Gemini</span><strong id="agy-gemini">—</strong><span id="agy-gemini-reset" class="subtle">等待数据</span></article>
+        <article class="card"><span class="label">Antigravity · Claude/GPT</span><strong id="agy-shared">—</strong><span id="agy-shared-reset" class="subtle">等待数据</span></article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="usage-title">
+      <div class="section-heading"><div><h2 id="usage-title">Token 用量</h2><p>按 (Provider, Model) 汇总，覆盖账本中所有已记录日期。</p></div></div>
+      <div class="panel usage-panel">
+        <div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div>
+        <div class="distribution">
+          <div class="chart-heading"><div><h3>Token 消耗趋势</h3><p class="hint">Total tokens · 本插件账本；小时刻度按浏览器本地时区显示。</p></div>
+            <div class="chart-controls"><label for="chart-period">时间</label><select id="chart-period"><option value="hours">最近 24 小时</option><option value="days">最近 30 天</option></select><label for="chart-model">模型</label><select id="chart-model"><option value="all">全部模型</option></select></div>
+          </div>
+          <div id="chart" class="chart" role="img" aria-label="Token 消耗随时间变化图">正在读取本地账本…</div>
+          <p id="chart-summary" class="hint" aria-live="polite"></p>
+        </div>
+        <h3 class="table-heading">各模型明细</h3>
+        <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 明细，可横向滚动"></div>
+      </div>
+    </section>
+
+    <section class="lower-grid" aria-label="Provider 与设置">
       <article class="panel"><h2>Provider 状态</h2><div id="providers"></div></article>
-      <article class="panel"><h2>本地 Token 统计</h2><div id="tokens"></div><p class="hint">Reasoning 已包含在 Output 中，不重复计入 Total。</p></article>
+      <section class="panel settings" aria-label="刷新设置"><div><h2>自动刷新间隔</h2><p class="hint">Provider 后台查询，范围 60–3600 秒。页面每 5 秒读取本地缓存，不额外请求 Provider。</p></div><form id="interval-form"><label for="interval">秒</label><input id="interval" type="number" min="60" max="3600" step="1" required><button type="submit">保存</button></form></section>
     </section>
-    <section class="panel settings" aria-label="刷新设置"><div><h2>自动刷新间隔</h2><p class="hint">Provider 后台查询，范围 60–3600 秒。此页面每 5 秒读取一次本地缓存，不额外请求 Provider。</p></div><form id="interval-form"><label for="interval">秒</label><input id="interval" type="number" min="60" max="3600" step="1" required><button type="submit">保存</button></form></section>
-    <footer><span id="last-check">连接本地 Pi 会话中…</span><span>仅监听 127.0.0.1 · 不展示凭据</span></footer>
+    <footer><span id="last-check">连接本地 Pi 会话中…</span><span>Pi Quota Monitor</span></footer>
   </main>
 </body>
 </html>

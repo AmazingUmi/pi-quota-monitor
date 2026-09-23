@@ -53,14 +53,83 @@ function card(id, window) {
   $(id).textContent = percent(window?.remainingPercent);
   $(`${id}-reset`).textContent = window ? countdown(window.resetAt) : "暂无额度数据";
 }
+function renderCountdown() {
+  if (!latest) return;
+  card("codex-five", latest.codex.value?.fiveHour);
+  card("codex-week", latest.codex.value?.weekly);
+  card("agy-gemini", groupWindow(latest.antigravity.value, "gemini"));
+  card("agy-shared", groupWindow(latest.antigravity.value, "shared"));
+}
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgElement(name, attributes = {}, text) {
+  const element = document.createElementNS(SVG_NS, name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+function calendarDay(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function renderChart() {
+  if (!latest) return;
+  const period = $("chart-period").value;
+  const model = $("chart-model").value;
+  const selected = model === "all" ? null : JSON.parse(model);
+  const current = new Date(`${latest.usage.timeline.today}T12:00:00`);
+  const slots = period === "days" ? Array.from({ length: 30 }, (_, index) => {
+    const date = new Date(current);
+    date.setDate(date.getDate() - (29 - index));
+    return { bucket: calendarDay(date), label: date.toLocaleDateString(undefined, { month: "numeric", day: "numeric" }) };
+  }) : Array.from({ length: 24 }, (_, index) => {
+    const hour = latest.usage.timeline.currentHour - (23 - index) * 3600000;
+    return { bucket: String(hour), label: new Date(hour).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) };
+  });
+  const counts = new Map(slots.map(({ bucket }) => [bucket, 0]));
+  for (const item of period === "days" ? latest.usage.timeline.days : latest.usage.timeline.hours) {
+    if (counts.has(item.bucket) && (!selected || (item.provider === selected[0] && item.model === selected[1]))) {
+      counts.set(item.bucket, counts.get(item.bucket) + item.totalTokens);
+    }
+  }
+  const values = slots.map(({ bucket }) => counts.get(bucket));
+  const peak = Math.max(0, ...values);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const label = selected ? `${selected[0]} / ${selected[1]}` : "全部模型";
+  $("chart-summary").textContent = `${period === "days" ? "最近 30 天" : "最近 24 小时"} · ${label} · ${total.toLocaleString()} tokens${latest.usage.stale ? "（账本汇总已过期）" : ""}`;
+  const chart = $("chart");
+  chart.setAttribute("aria-label", `${label}在${period === "days" ? "最近30天" : "最近24小时"}消耗 ${total.toLocaleString()} tokens 的时间趋势`);
+  chart.replaceChildren();
+  const svg = svgElement("svg", { viewBox: "0 0 1000 290", role: "presentation", "aria-hidden": "true" });
+  const left = 76, right = 972, top = 20, bottom = 245;
+  for (let tick = 0; tick <= 2; tick++) {
+    const y = bottom - tick * (bottom - top) / 2;
+    svg.append(svgElement("line", { x1: left, x2: right, y1: y, y2: y, class: "grid-line" }));
+    svg.append(svgElement("text", { x: left - 13, y: y + 5, class: "axis-label", "text-anchor": "end" }, Math.round(peak * tick / 2).toLocaleString()));
+  }
+  const points = values.map((value, index) => {
+    const x = left + index * (right - left) / (values.length - 1);
+    const y = bottom - (peak ? value / peak : 0) * (bottom - top);
+    return { x, y, value };
+  });
+  const line = points.map(({ x, y }, index) => `${index ? "L" : "M"}${x} ${y}`).join(" ");
+  svg.append(svgElement("path", { d: `${line} L${right} ${bottom} L${left} ${bottom} Z`, class: "chart-area" }));
+  svg.append(svgElement("path", { d: line, class: "chart-line" }));
+  for (let index = 0; index < slots.length; index++) {
+    const { x, y, value } = points[index];
+    const circle = svgElement("circle", { cx: x, cy: y, r: 3.5, class: "chart-point" });
+    circle.append(svgElement("title", {}, `${slots[index].label}: ${value.toLocaleString()} tokens`));
+    svg.append(circle);
+    if (index === 0 || index === slots.length - 1 || index % (period === "days" ? 7 : 6) === 0) {
+      svg.append(svgElement("text", { x, y: 279, class: "axis-label", "text-anchor": index === 0 ? "start" : index === slots.length - 1 ? "end" : "middle" }, slots[index].label));
+    }
+  }
+  chart.append(svg);
+  if (!total) notice(chart, "所选时间与模型暂无 Token 记录。");
+}
 function render() {
   if (!latest) return;
   const codex = latest.codex;
   const agy = latest.antigravity;
-  card("codex-five", codex.value?.fiveHour);
-  card("codex-week", codex.value?.weekly);
-  card("agy-gemini", groupWindow(agy.value, "gemini"));
-  card("agy-shared", groupWindow(agy.value, "shared"));
+  renderCountdown();
   const providers = $("providers");
   providers.replaceChildren();
   title(providers, `OpenAI Codex${codex.value?.plan ? ` · ${codex.value.plan}` : ""}`);
@@ -79,16 +148,77 @@ function render() {
   if (agy.value?.capturedAt) row(providers, "最近成功查询", new Date(agy.value.capturedAt).toLocaleString());
   notice(providers, agy.value?.summaryError);
   notice(providers, agy.error ? `Antigravity：${agy.error}${agy.value ? "（保留上次成功结果）" : ""}` : "");
+  const usage = latest.usage;
+  $("overview-tokens").textContent = Number(usage.totals.totalTokens).toLocaleString();
+  const session = latest.session;
+  $("overview-cost").textContent = typeof session.costUsd === "number" ? `$${session.costUsd.toFixed(2)}` : "—";
+  const context = session.context;
+  $("overview-context").textContent = typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : "—";
+  $("overview-context-detail").textContent = context ? `${context.tokens === null ? "未知" : Number(context.tokens).toLocaleString()} / ${Number(context.contextWindow).toLocaleString()} tokens` : "当前模型未提供上下文窗口";
+  const columns = [["Input", "input"], ["Output", "output"], ["Reasoning", "reasoning"], ["Cache read", "cacheRead"], ["Cache write", "cacheWrite"], ["Total tokens", "totalTokens"]];
   const tokens = $("tokens");
   tokens.replaceChildren();
-  for (const [name, value] of [["当前会话", latest.session], ["今日", latest.daily]]) {
-    title(tokens, name);
-    for (const [label, key] of [["Input", "input"], ["Output", "output"], ["Reasoning", "reasoning"], ["Cache read", "cacheRead"], ["Cache write", "cacheWrite"], ["Total", "totalTokens"]]) {
-      row(tokens, label, Number(value?.[key] ?? 0).toLocaleString());
+  if (usage.stale) notice(tokens, usage.error || "Token 汇总已过期，显示上次有效结果");
+  if (usage.invalidRecords) notice(tokens, `已跳过 ${usage.invalidRecords.toLocaleString()} 条损坏记录。`);
+  if (!usage.records) notice(tokens, "暂无本插件记录的 Token 用量。");
+  const total = document.createElement("div");
+  total.className = "token-total";
+  total.textContent = Number(usage.totals.totalTokens).toLocaleString();
+  tokens.append(total);
+  const metrics = document.createElement("div");
+  metrics.className = "metrics";
+  for (const [label, key] of columns) {
+    const metric = document.createElement("div");
+    const name = document.createElement("span");
+    name.textContent = label;
+    const value = document.createElement("strong");
+    value.textContent = Number(usage.totals[key]).toLocaleString();
+    metric.append(name, value);
+    metrics.append(metric);
+  }
+  tokens.append(metrics);
+  const modelSelect = $("chart-model");
+  const choices = [["全部模型", "all"], ...usage.models.map((item) => [`${item.provider} / ${item.model}`, JSON.stringify([item.provider, item.model])])];
+  if (modelSelect.options.length !== choices.length || choices.some(([, value], index) => modelSelect.options[index]?.value !== value)) {
+    const selectedModel = modelSelect.value;
+    modelSelect.replaceChildren(...choices.map(([label, value]) => new Option(label, value)));
+    modelSelect.value = choices.some(([, value]) => value === selectedModel) ? selectedModel : "all";
+  }
+  renderChart();
+  const models = $("models");
+  models.replaceChildren();
+  if (usage.models.length) {
+    const table = document.createElement("table");
+    const caption = document.createElement("caption");
+    caption.textContent = "按 Provider 和模型分组，Total tokens 降序";
+    table.append(caption);
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    for (const label of ["Provider", "Model", ...columns.map(([name]) => name)]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      header.append(cell);
     }
+    head.append(header);
+    table.append(head);
+    const body = document.createElement("tbody");
+    for (const item of usage.models) {
+      const tr = document.createElement("tr");
+      for (const text of [item.provider, item.model, ...columns.map(([, key]) => Number(item[key]).toLocaleString())]) {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        tr.append(cell);
+      }
+      body.append(tr);
+    }
+    table.append(body);
+    models.append(table);
+  } else {
+    models.textContent = "暂无模型明细";
   }
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
-  $("last-check").textContent = `本地状态更新：${new Date(latest.updatedAt).toLocaleTimeString()}`;
+  $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }
 async function load() {
   const response = await fetch("/api/state", { cache: "no-store" });
@@ -97,6 +227,7 @@ async function load() {
   control = state.control;
   latest = state;
   render();
+  $("feedback").textContent = "";
 }
 async function action(path, body) {
   if (busy || !control) return;
@@ -119,6 +250,8 @@ async function action(path, body) {
   }
 }
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
+$("chart-period").addEventListener("change", renderChart);
+$("chart-model").addEventListener("change", renderChart);
 $("interval-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const seconds = Number($("interval").value);
@@ -127,4 +260,4 @@ $("interval-form").addEventListener("submit", (event) => {
 });
 void load().catch((error) => { $("feedback").textContent = error.message; });
 setInterval(() => { void load().catch((error) => { $("feedback").textContent = error.message; }); }, 5000);
-setInterval(render, 1000);
+setInterval(renderCountdown, 1000);

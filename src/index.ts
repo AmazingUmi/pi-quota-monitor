@@ -5,6 +5,7 @@ import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/
 import { queryCodexQuota } from "./providers/codex.js";
 import { RefreshScheduler } from "./scheduler.js";
 import { formatDetails, formatStatus } from "./statusline.js";
+import { UsageAggregator } from "./tokens/aggregate.js";
 import { accumulate, emptyTotals, tokenRecord } from "./tokens/collector.js";
 import { appendUsage, localDate, readDailyUsage } from "./tokens/store.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
@@ -21,6 +22,23 @@ function safeFailure(error: unknown): string {
   return "Query failed; retry later";
 }
 
+function sessionMetrics(ctx: ExtensionContext): { costUsd: number | null; context: { tokens: number | null; contextWindow: number; percent: number | null } | null } {
+  let cost = 0;
+  for (const entry of ctx.sessionManager.getEntries()) {
+    const usage = entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary" ? entry.usage
+      : entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "toolResult") ? entry.message.usage : undefined;
+    const value = usage?.cost?.total;
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) cost += value;
+  }
+  const usage = ctx.getContextUsage();
+  const context = usage && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
+    ? { contextWindow: usage.contextWindow,
+      tokens: usage.tokens !== null && Number.isFinite(usage.tokens) ? usage.tokens : null,
+      percent: usage.percent !== null && Number.isFinite(usage.percent) ? usage.percent : null }
+    : null;
+  return { costUsd: Number.isFinite(cost) ? cost : null, context };
+}
+
 function branchTotals(ctx: ExtensionContext): TokenTotals {
   return ctx.sessionManager.getBranch().reduce((totals, entry) => {
     if (entry.type !== "message" || entry.message.role !== "assistant") return totals;
@@ -35,6 +53,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let config: MonitorConfig = { ...DEFAULT_CONFIG };
   let scheduler: RefreshScheduler | undefined;
   let dashboard: QuotaDashboard | undefined;
+  let usageAggregator: UsageAggregator | undefined;
   let abortController: AbortController | undefined;
   let currentContext: ExtensionContext | undefined;
   let sessionTotals = emptyTotals();
@@ -222,8 +241,12 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       const command = args.trim();
       if (command === "console") {
         if (!dashboard) {
+          const aggregator = new UsageAggregator();
+          await aggregator.start();
+          if (!live(epoch)) { aggregator.stop(); return; }
+          usageAggregator = aggregator;
           dashboard = new QuotaDashboard({
-            state: () => ({ codex, antigravity, session: sessionTotals, daily: dailyTotals, config, updatedAt: Date.now() }),
+            state: () => ({ codex, antigravity, usage: aggregator.state(), session: currentContext ? sessionMetrics(currentContext) : { costUsd: null, context: null }, config, updatedAt: Date.now() }),
             refresh: async () => {
               if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
               await refreshAll(currentContext, true);
@@ -242,6 +265,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
         } catch {
           if (!live(epoch)) return;
           dashboard = undefined;
+          usageAggregator?.stop();
+          usageAggregator = undefined;
           render(ctx);
           ctx.ui.notify("无法启动本地额度控制台。", "error");
         }
@@ -279,6 +304,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     scheduler = undefined;
     const closingDashboard = dashboard;
     dashboard = undefined;
+    usageAggregator?.stop();
+    usageAggregator = undefined;
     void closingDashboard?.stop();
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;

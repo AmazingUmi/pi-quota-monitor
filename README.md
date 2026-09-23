@@ -21,7 +21,7 @@ pi list
 ## 命令与配置
 
 - `/quota`：完整额度、重置时间、当前会话及当日 Token 统计。
-- `/quota console`：启动本地控制台，返回 `http://127.0.0.1:<随机端口>`；复制链接到浏览器打开。在 pi-web 中运行此命令会隐藏**本扩展**的下栏状态，其他扩展状态不受影响。
+- `/quota console`：启动本地控制台，返回 `http://127.0.0.1:<随机端口>`；复制链接到浏览器打开。在 pi-web 中运行此命令会隐藏**本扩展**的下栏状态，其他扩展状态不受影响。控制台展示本插件账本中所有已记录日期的全模型总计及按 `(provider, model)` 分组的明细；趋势图可切换最近 24 小时（按小时）/最近 30 天（按日），选择全部模型或指定 Provider + 模型。总计不覆盖插件启用前历史，也不显示当前会话/今日 Token 面板。顶部另显示当前 Pi 会话的估算费用与当前模型上下文窗口占用（与全账本 Tokens 口径不同）；这不是账户预算上限。
 - `/quota refresh`：强制刷新两个 Provider。
 - `/quota interval 180`：设置兜底刷新间隔（60–3600 秒），立即生效并保存。
 
@@ -36,7 +36,7 @@ pi list
 }
 ```
 
-间隔为后台兜底查询频率；启动自动查询，切换到目标 Provider 时更新，相关 Provider 的回复之后仅在缓存超过 `staleAfterSeconds` 时更新，429 / quota error 则立即尝试。多个同时触发的查询会合并。不会高频轮询；每次状态重绘更新 reset 倒计时。控制台每 5 秒读取一次**本机缓存**，不会因此调用额度 API；可在页面上手动刷新或修改间隔。控制台绑定 **Pi 运行机器**的 `127.0.0.1`、不暴露访问凭据、会话切换/退出时关闭，旧链接届时失效。若 pi-web 运行在远程主机，浏览器无法直接访问远程机器的 localhost；需自行建立 SSH 端口转发，勿将控制台端口公开到局域网。
+间隔为后台兜底查询频率；启动自动查询，切换到目标 Provider 时更新，相关 Provider 的回复之后仅在缓存超过 `staleAfterSeconds` 时更新，429 / quota error 则立即尝试。多个同时触发的查询会合并。不会高频轮询；每次状态重绘更新 reset 倒计时。控制台每 5 秒读取一次**本机缓存**，不会因此调用额度 API；Token 账本也每 5 秒增量扫描新增内容（首次流式读取），包含其他进程追加的数据。损坏记录跳过并提示，聚合失败时保留上次结果并标示过期。可在页面上手动刷新额度或修改间隔。控制台绑定 **Pi 运行机器**的 `127.0.0.1`、不暴露访问凭据、会话切换/退出时关闭，旧链接届时失效。若 pi-web 运行在远程主机，浏览器无法直接访问远程机器的 localhost；需自行建立 SSH 端口转发，勿将控制台端口公开到局域网。
 
 每日 ledger 文件为 `usage-YYYY-MM-DD.jsonl`（本地日期），仅存时间戳、Provider、模型和 Token 计数；不会在本扩展的文件中写入 access token、refresh token 或 API key。`reasoning` 是 `output` 的子集，不能重复加入 `totalTokens`。Codex 凭据只发送至 `https://chatgpt.com/backend-api/wham/usage`，旧版 OAuth Antigravity 凭据只发送至硬编码的官方 Cloud Code Assist 域名；响应禁用 HTTP 跳转。本机 agy 模式不读取 OAuth 凭据，调用 agy 自己的登录会话；由于每次 `/usage` 会启动新的 agy 后端并刷新额度，本机模式至少等待 120 秒（不受较短的 HTTP `requestTimeoutSeconds` 限制）。如遇 `agy native query timed out`，可直接运行 `/agy-usage` 检查原生查询或检查 agy 登录状态。没有账户或网络不可用时显示 `?`，不会弹出登录框。
 
