@@ -344,7 +344,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     handler: (args, ctx) => handleQuotaCommand(`interval ${args}`, ctx),
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     active = false;
     generation++;
     abortController?.abort();
@@ -355,10 +355,12 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     dashboard = undefined;
     usageAggregator?.stop();
     usageAggregator = undefined;
-    void closingDashboard?.stop();
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
     currentContext = undefined;
-    if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
+    try { if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined); }
+    catch { /* A closing UI must not prevent ledger flushing. */ }
+    // Pi awaits shutdown handlers; flush the last assistant's ledger write before exit or session replacement.
+    await Promise.allSettled([ledgerQueue, closingDashboard?.stop()]);
   });
 }

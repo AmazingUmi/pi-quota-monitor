@@ -1,5 +1,5 @@
 {
-  "name": "pi-quota_monitor",
+  "name": "pi-quota-monitor",
   "version": "0.2.0",
   "description": "Real-time OpenAI Codex and Antigravity quota status for Pi",
   "author": "AmazingUmi",
@@ -25,13 +25,13 @@
 
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/AmazingUmi/pi-quota_monitor.git"
+    "url": "git+https://github.com/AmazingUmi/pi-quota-monitor.git"
   },
 
-  "homepage": "https://github.com/AmazingUmi/pi-quota_monitor#readme",
+  "homepage": "https://github.com/AmazingUmi/pi-quota-monitor#readme",
 
   "bugs": {
-    "url": "https://github.com/AmazingUmi/pi-quota_monitor/issues"
+    "url": "https://github.com/AmazingUmi/pi-quota-monitor/issues"
   },
 
   "publishConfig": {
@@ -47,7 +47,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "prepublishOnly": "npm run check"
   },
 
   "peerDependencies": {

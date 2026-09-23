@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { saveConfig } from "../src/config.js";
 import quotaMonitor from "../src/index.js";
+import { appendUsage } from "../src/tokens/store.js";
 
 vi.mock("../src/config.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/config.js")>();
@@ -57,6 +58,39 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   await fire("session_shutdown");
   cleanup.pop();
   expect(statuses.at(-1)).toBeUndefined();
+});
+
+it("waits for the last ledger write before shutting down", async () => {
+  let finishWrite!: () => void;
+  vi.mocked(appendUsage).mockImplementationOnce(() => new Promise<void>((resolve) => { finishWrite = resolve; }));
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  quotaMonitor({
+    on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
+    registerCommand() {},
+  } as unknown as ExtensionAPI);
+  const ctx = {
+    hasUI: false,
+    sessionManager: { getBranch: () => [] },
+    modelRegistry: {
+      getProvider: () => undefined,
+      getProviderAuth: async () => undefined,
+      getApiKeyForProvider: async () => undefined,
+    },
+  } as unknown as ExtensionContext;
+  const fire = (name: string, event = {}) => handlers.get(name)?.(event, ctx);
+  await fire("session_start");
+  await fire("message_end", { message: {
+    role: "assistant", provider: "openai-codex", model: "gpt", timestamp: Date.now(), stopReason: "stop",
+    usage: { input: 10, output: 2, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
+  } });
+  await vi.waitFor(() => expect(finishWrite).toBeTypeOf("function"));
+  let stopped = false;
+  const shutdown = Promise.resolve(fire("session_shutdown")).then(() => { stopped = true; });
+  await Promise.resolve();
+  expect(stopped).toBe(false);
+  finishWrite();
+  await shutdown;
+  expect(stopped).toBe(true);
 });
 
 it("queries the local agy provider natively without treating its sentinel as OAuth JSON", async () => {

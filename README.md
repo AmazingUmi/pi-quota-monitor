@@ -1,36 +1,35 @@
 # Pi Quota Monitor
 
-Pi 扩展：显示 Codex / Antigravity 剩余额度和本地 Token 用量。除 Pi TUI / pi-web 状态栏外，也提供独立的本机 Web 控制台。
+显示 OpenAI Codex、Antigravity 的剩余额度与本地 Token 用量的 [Pi package](https://pi.dev/packages)。支持 Pi TUI / pi-web 状态栏、`/quota` 命令和本机 Web 控制台。
 
-## 使用
+## 安装
 
-需要 Node.js 22+、Pi（使用 `@earendil-works/pi-coding-agent` API）和已经登录的 `openai-codex` / `antigravity` Provider。Antigravity 需要另外安装并登录相应的 pi-antigravity Provider。对于使用本机 `agy://local-stream-json` 的版本（如 `@tian.zuo/pi-antigravity`），本扩展调用同一原生 `agy --print /usage --output-format json` 查询，无需把 Provider 的 `agy-local-session` 占位符误当作 OAuth token；旧版 OAuth Provider 则继续使用 Cloud Code Assist API。不代替这两个 Provider 的登录流程。
-
-在仓库目录安装为 Pi 包（供普通 Pi CLI 和 pi-web 会话自动加载）：
+需要 Node.js 22+ 和使用 `@earendil-works/pi-coding-agent` API 的 Pi。额度查询依赖已登录的 `openai-codex` / `antigravity` Provider；本扩展不会代替 Provider 登录。
 
 ```bash
-# 在仓库根目录执行
-npm install
-pi install .
-pi list
+pi install npm:pi-quota-monitor
 ```
 
-这是标准 Pi package 布局：`package.json` 的 `pi.extensions` 指向 `./src/index.ts`，Pi 直接加载 TypeScript；`src/` 中的控制台 HTML、CSS 与客户端脚本随包发布，测试与开发依赖不打入扩展包。
+安装后启动新 Pi 会话；pi-web 中可在「设置 → 插件」重新加载会话。`pi --extension ./src/index.ts` 仅供仓库内临时调试，不会安装到 pi-web。源码安装使用 `pi install .`。
 
-**`pi --extension ./src/index.ts` 只对这一次 Pi CLI 进程生效，并不会给 pi-web 安装扩展。** 安装后在 pi-web 的「设置 → 插件」里选择「重新加载会话」，或打开新会话；仅刷新浏览器页面不保证现有 Pi 会话重新加载扩展。pi-web 通过 Pi RPC `setStatus` 在**聊天输入框下方的扩展状态栏**显示内容；它不是「工具」按钮。若需更清晰的独立视图，可用 `/quota-console`。开发模式下可运行 `npm run check`。
+Antigravity 需另外安装并登录相应 Provider。本机 `agy://local-stream-json` 模式需要可执行的 `agy` 及其登录会话；旧版 OAuth Provider 则通过 Cloud Code Assist API 查询。未登录或网络不可用时，额度显示为 `?`。
 
-状态示例：`OAI 73%/61% ↻1h20m | AGY 95%/83% ↻2h17m | ↑284k ↓37k`。两组比例均依次为 **5 小时 / 每周**，AGY 状态栏默认只显示 Gemini，倒计时取 Gemini 的 5 小时窗口；Claude/GPT 仍可在 `/quota` 或控制台查看。`?` 表示没有对应窗口数据，而非 0%。旧版 OAuth Antigravity 汇总额度不可用（如免费账户的 `SUBSCRIPTION_REQUIRED`）时回退至各模型 `remainingFraction`，但无法识别其 5 小时/每周窗口时状态栏显示 `?/?`，不会误标窗口；本机 agy 使用 `/usage` 返回的 quota groups。同一窗口有多个额度时取最低剩余值。失败时保留**本会话**最后一次成功查询的额度；切换会话则重新查询。
+## 命令
 
-## 命令与配置
+| 命令 | 功能 |
+| --- | --- |
+| `/quota` | 查看额度、重置时间、当前会话与当日 Token 用量 |
+| `/quota-refresh` | 立即刷新两个 Provider |
+| `/quota-interval 180` | 设置后台刷新间隔（60–3600 秒） |
+| `/quota-console` | 打开本机 Web 控制台 |
 
-- `/quota`：完整额度、重置时间、当前会话及当日 Token 统计。
-- `/quota-console`：启动本地控制台，返回 `http://127.0.0.1:<随机端口>`；复制链接到浏览器打开。控制台打开时 pi-web 仍按设置显示本扩展的 RPC 状态栏，其他扩展状态项不受影响。页面分为概览、剩余额度、用量三个区；剩余额度按 OpenAI Codex / Antigravity 分块，Antigravity 展示 Provider 实际返回的 quota groups / 模型及窗口，不假定固定窗口。用量区展示本插件账本中所有已记录日期的总计、按 `(provider, model)` 分组的明细；趋势图可切换最近 24 小时（按小时）/最近 30 天（按日），选择全部模型或指定 Provider + 模型。总计不覆盖插件启用前历史，也不显示当前会话/今日 Token 面板。概览显示**全部账本按公开 API 标价估算的费用**与当前模型上下文窗口占用（两者口径不同）；这不是订阅实际账单或账户预算上限。未知价格的模型单独标为未计价。
-- `/quota-refresh`：强制刷新两个 Provider。
-- `/quota-interval 180`：设置兜底刷新间隔（60–3600 秒），立即生效并保存。
+状态栏示例：`OAI 73%/61% ↻1h20m | AGY 95%/83% ↻2h17m | ↑284k ↓37k`。比例分别表示 **5 小时 / 每周**的剩余百分比；AGY 状态栏只显示 Gemini，其他额度可在 `/quota` 或控制台查看。`?` 表示对应窗口不可识别或尚无数据，不表示 0%。查询失败时，本会话仍显示最后一次成功结果。
 
-为便于 pi-web 自动补全，Console、刷新和间隔使用独立连字符命令。旧的 `/quota console`、`/quota refresh` 和 `/quota interval <秒>` 写法仍作为兼容别名。
+控制台展示额度、按 Provider/模型汇总的账本用量、24 小时/30 天趋势、当前上下文占用及费用估算。地址只监听 Pi 所在机器的 `127.0.0.1`，会话结束后关闭；远程 pi-web 用户需要自行使用 SSH 端口转发，**不要将端口公开到局域网**。控制台每 5 秒读取本机缓存与账本，不会因此反复调用额度 API。
 
-配置在 `~/.pi/agent/pi-quota-monitor/config.json`（尊重 `PI_CODING_AGENT_DIR`）：
+## 数据与配置
+
+配置文件位于 `~/.pi/agent/pi-quota-monitor/config.json`（支持 `PI_CODING_AGENT_DIR`）。默认值：
 
 ```json
 {
@@ -43,26 +42,18 @@ pi list
 }
 ```
 
-间隔为后台兜底查询频率；启动自动查询，切换到目标 Provider 时更新，相关 Provider 的回复之后仅在缓存超过 `staleAfterSeconds` 时更新，429 / quota error 则立即尝试。多个同时触发的查询会合并。不会高频轮询；每次状态重绘更新 reset 倒计时。两个状态栏开关只控制 pi-web RPC 状态栏中的 OAI / AGY 片段，默认开启；都关闭时仍显示 Token 统计，不留空占位或分隔符。开关不停止额度查询、不隐藏 Console Provider 块、不改变 `/quota` 输出；TUI 状态栏保持原行为。旧配置缺少字段时按开启处理。控制台每 5 秒读取一次**本机缓存**，不会因此调用额度 API；Token 账本也每 5 秒增量扫描新增内容（首次流式读取），包含其他进程追加的数据。损坏记录跳过并提示，聚合失败时保留上次结果并标示过期。可在页面上手动刷新额度或修改间隔。控制台绑定 **Pi 运行机器**的 `127.0.0.1`、不暴露访问凭据、会话切换/退出时关闭，旧链接届时失效。若 pi-web 运行在远程主机，浏览器无法直接访问远程机器的 localhost；需自行建立 SSH 端口转发，勿将控制台端口公开到局域网。
+两个状态栏开关仅控制 pi-web 的 OAI/AGY 片段，不停止查询或隐藏控制台数据。Token 账本是同目录下按本地日期存放的 `usage-YYYY-MM-DD.jsonl`，只记录时间戳、Provider、模型和 Token 计数；不记录提示词或凭据。用量总计仅涵盖**安装本插件后记录的消息**，不回填 Pi 历史。Reasoning 已包含在 Output 中，不重复计入总量。
 
-估算价格表位于 `src/tokens/pricing.ts`，截至 2026-09-23，来源为 [OpenAI 模型价格](https://developers.openai.com/api/docs/models/gpt-6-sol)、[Gemini API 价格](https://ai.google.dev/gemini-api/docs/pricing) 与 [Claude API 价格](https://platform.claude.com/docs/en/about-claude/pricing)。按每条记录分开计算普通 Input、Cache read、Cache write、Output，Reasoning 不重复计价；超过公开阈值的请求采用对应高上下文价。Claude Cache write 以 5 分钟缓存价格估算；缓存存储时长、非文本、工具调用、订阅折扣及历史价格变动不在账本中，因此不能推算真实收费。价格未知或所需价格分量缺失时，整条记录列为未计价而非零费用。Console 中可展开价格表和官方来源。
+费用按 `src/tokens/pricing.ts` 中的公开 API 标价估算（价格核对日期：2026-09-23），**不是订阅实付、余额或预算上限**。未知模型或缺少价格分量的记录标为未计价；缓存时长、非文本、折扣及历史价格变化可能造成偏差。额度窗口的金额是根据本插件已记录的可计价用量和 Provider 返回的使用百分比外推，数据不完整时尤其不可靠。
 
-每日 ledger 文件为 `usage-YYYY-MM-DD.jsonl`（本地日期），仅存时间戳、Provider、模型和 Token 计数；不会在本扩展的文件中写入 access token、refresh token 或 API key。`reasoning` 是 `output` 的子集，不能重复加入 `totalTokens`。Codex 凭据只发送至 `https://chatgpt.com/backend-api/wham/usage`，旧版 OAuth Antigravity 凭据只发送至硬编码的官方 Cloud Code Assist 域名；响应禁用 HTTP 跳转。本机 agy 模式不读取 OAuth 凭据，调用 agy 自己的登录会话；由于每次 `/usage` 会启动新的 agy 后端并刷新额度，本机模式至少等待 120 秒（不受较短的 HTTP `requestTimeoutSeconds` 限制）。如遇 `agy native query timed out`，可直接运行 `/agy-usage` 检查原生查询或检查 agy 登录状态。没有账户或网络不可用时显示 `?`，不会弹出登录框。
+Codex 凭据仅用于 `https://chatgpt.com/backend-api/wham/usage`；旧版 OAuth Antigravity 凭据仅发送至代码中固定的 Cloud Code Assist 域名，HTTP 跳转被禁用。本机 agy 模式调用其自身登录会话，不读取 OAuth 凭据。
 
-## 已实现的 Console 功能
+## 开发
 
-- 本地独立页面采用参考 pi-web 与 OpenCode Console 的卡片式布局；样式在插件内定义，默认跟随系统浅色/深色，不读取 pi-web 主题或 CSS。采用“概览 → 剩余额度 → 用量”三级布局，提供两个 Provider 分块、可折叠的状态与设置、额度刷新、后台刷新间隔及 pi-web OAI / AGY 状态栏开关。支持窄屏、键盘焦点、加载/错误及空状态。
-- Codex 的 5 小时 / 每周窗口与可识别的 Antigravity 5 小时 / 每周窗口显示额度金额估算：以本插件在当前周期内按公开 API 标价计算的用量金额除以 Provider 报告的已用百分比，估算周期总额与剩余额度金额。不是订阅实付或账户余额；未记录、未计价及非文本用量会使结果不完整或偏低，缺少窗口周期 / 重置时间时不推算。
-- Token 总计覆盖本插件 `usage-YYYY-MM-DD.jsonl` 中**所有已记录日期**，不是插件启用前的完整 Pi 历史；明细以 `(provider, model)` 分组，同名模型跨 Provider 不合并，按 Total tokens 降序展示 Input、Output、Reasoning、Cache read、Cache write、Total tokens 及估算费用。Reasoning 属于 Output，不重复计数或计价。Console 不展示“当前会话/今日”Token 面板；TUI 状态栏与 `/quota` 的原有统计保持独立。
-- 趋势图支持最近 24 小时按小时、最近 30 天按日，以及全部模型或指定 Provider + 模型。概述展示全账本 Tokens、按公开 API 标价估算的费用、当前模型上下文占用；估算费用不等于 Codex/Antigravity 订阅实付金额或账户预算上限，未知价格记录单独标注未计价。可展开查看价格表和估算口径。
-- 初次以流式方式读取账本，后续轮询增量聚合；处理跨天、其他进程追加、半写行及损坏记录，避免重复计数。聚合失败时保留上次有效结果并标为过期。API 只输出汇总，不发送原始账本、文件路径或凭据；保持回环地址监听、CSP 和写请求校验。
-- 测试覆盖跨日期/Provider 汇总、Reasoning 不重复计数、空/损坏/半写账本、外部追加、重启恢复、费用估算及 API 安全；`npm run check` 运行类型检查和测试。
+```bash
+npm ci
+npm run check
+npm pack --dry-run
+```
 
-## 参考
-
-- [Pi 扩展与 RPC 状态栏 API](https://github.com/earendil-works/pi)
-- [pi-web provider-usage](https://github.com/agegr/pi-web/blob/main/lib/provider-usage.ts)
-- [pi-usage](https://github.com/narumiruna/pi-extensions/tree/main/packages/pi-usage)
-- [pi-antigravity](https://github.com/Rahularya01/pi-antigravity)
-
-本项目不依赖这些扩展的私有代码或运行时状态，也不调用另一个扩展的命令。
+Pi 根据 `package.json` 的 `pi.extensions` 直接加载 TypeScript，无需编译。发布包包含 `src/`、README 和 LICENSE。
