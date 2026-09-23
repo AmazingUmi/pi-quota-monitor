@@ -22,21 +22,13 @@ function safeFailure(error: unknown): string {
   return "Query failed; retry later";
 }
 
-function sessionMetrics(ctx: ExtensionContext): { costUsd: number | null; context: { tokens: number | null; contextWindow: number; percent: number | null } | null } {
-  let cost = 0;
-  for (const entry of ctx.sessionManager.getEntries()) {
-    const usage = entry.type === "usage" || entry.type === "compaction" || entry.type === "branch_summary" ? entry.usage
-      : entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "toolResult") ? entry.message.usage : undefined;
-    const value = usage?.cost?.total;
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) cost += value;
-  }
+function contextMetrics(ctx: ExtensionContext): { tokens: number | null; contextWindow: number; percent: number | null } | null {
   const usage = ctx.getContextUsage();
-  const context = usage && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
+  return usage && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
     ? { contextWindow: usage.contextWindow,
       tokens: usage.tokens !== null && Number.isFinite(usage.tokens) ? usage.tokens : null,
       percent: usage.percent !== null && Number.isFinite(usage.percent) ? usage.percent : null }
     : null;
-  return { costUsd: Number.isFinite(cost) ? cost : null, context };
 }
 
 function branchTotals(ctx: ExtensionContext): TokenTotals {
@@ -246,7 +238,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!live(epoch)) { aggregator.stop(); return; }
           usageAggregator = aggregator;
           dashboard = new QuotaDashboard({
-            state: () => ({ codex, antigravity, usage: aggregator.state(), session: currentContext ? sessionMetrics(currentContext) : { costUsd: null, context: null }, config, updatedAt: Date.now() }),
+            state: () => ({ codex, antigravity, usage: aggregator.state(), context: currentContext ? contextMetrics(currentContext) : null, config, updatedAt: Date.now() }),
             refresh: async () => {
               if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
               await refreshAll(currentContext, true);

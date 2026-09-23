@@ -3,13 +3,14 @@ import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { UsageSummary } from "./tokens/aggregate.js";
+import { PRICE_TABLE } from "./tokens/pricing.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
 
 export interface DashboardState {
   codex: ProviderCache<CodexQuota>;
   antigravity: ProviderCache<AntigravityQuota>;
   usage: UsageSummary;
-  session: { costUsd: number | null; context: { tokens: number | null; contextWindow: number; percent: number | null } | null };
+  context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
   config: MonitorConfig;
   updatedAt: number;
 }
@@ -122,10 +123,17 @@ export class QuotaDashboard {
       } else if (pathname === "/style.css") {
         reply(res, 200, assets.style.toString("utf8"), "text/css; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { codex, antigravity, usage, session, config, updatedAt } = this.actions.state();
+        const { codex, antigravity, usage, context, config, updatedAt } = this.actions.state();
         const summary = {
           totals: publicTotals(usage.totals),
-          models: usage.models.map(({ provider, model, ...totals }) => ({ provider, model, ...publicTotals(totals) })),
+          models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
+            estimatedCostUsd: item.estimatedCostUsd, pricedRecords: item.pricedRecords,
+            unpricedRecords: item.unpricedRecords, unpricedTokens: item.unpricedTokens })),
+          pricing: { asOf: usage.pricing.asOf, estimatedCostUsd: usage.pricing.estimatedCostUsd,
+            pricedRecords: usage.pricing.pricedRecords, unpricedRecords: usage.pricing.unpricedRecords,
+            unpricedTokens: usage.pricing.unpricedTokens,
+            catalog: PRICE_TABLE.map((row) => ({ provider: row.provider, model: row.model, rates: { ...row.rates },
+              source: row.source, ...(row.longContext ? { longContext: { threshold: row.longContext.threshold, rates: { ...row.longContext.rates } } } : {}) })) },
           records: usage.records, invalidRecords: usage.invalidRecords,
           timeline: {
             hours: usage.timeline.hours.map(({ bucket, provider, model, totalTokens }) => ({ bucket, provider, model, totalTokens })),
@@ -134,10 +142,9 @@ export class QuotaDashboard {
           },
           updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
         };
-        reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary, session: {
-          costUsd: session.costUsd,
-          context: session.context ? { tokens: session.context.tokens, contextWindow: session.context.contextWindow, percent: session.context.percent } : null,
-        }, config: { refreshIntervalSeconds: config.refreshIntervalSeconds }, updatedAt, control: this.nonce }));
+        reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary,
+          context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
+          config: { refreshIntervalSeconds: config.refreshIntervalSeconds }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
       }

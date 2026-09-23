@@ -18,12 +18,12 @@
     <section class="intro panel" aria-labelledby="intro-title">
       <h2 id="intro-title">本地用量账本</h2>
       <p>统计本插件启用后记录的所有日期，不包含启用前的历史。额度来自 Provider 缓存，手动刷新可重新查询。</p>
-      <p class="hint">费用是当前 Pi 会话已报告的估算花费，不是账户预算上限；上下文百分比是当前模型窗口占用。仅监听 127.0.0.1 · 不展示凭据 · Reasoning 属于 Output，不重复计入 Total tokens</p>
+      <p class="hint">费用按本插件账本的 Token 和公开 API 标价估算，并非 Codex/Antigravity 订阅实际账单或账户预算上限；上下文百分比是当前模型窗口占用。仅监听 127.0.0.1 · 不展示凭据 · Reasoning 属于 Output，不重复计入 Total tokens</p>
     </section>
 
     <section class="overview" aria-label="Token 概览">
       <article class="metric-card"><span>全部账本 Tokens</span><strong id="overview-tokens">—</strong></article>
-      <article class="metric-card"><span>当前会话费用（USD）</span><strong id="overview-cost">—</strong></article>
+      <article class="metric-card"><span>全部账本估算费用（USD）</span><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
       <article class="metric-card"><span>当前模型上下文</span><strong id="overview-context">—</strong><small id="overview-context-detail">等待数据</small></article>
     </section>
 
@@ -49,7 +49,8 @@
           <p id="chart-summary" class="hint" aria-live="polite"></p>
         </div>
         <h3 class="table-heading">各模型明细</h3>
-        <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 明细，可横向滚动"></div>
+        <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 与估算费用明细，可横向滚动"></div>
+        <details class="price-details"><summary>查看价格表与估算口径</summary><p class="hint">标准付费 API 文本 Token 标价（USD / 100 万 tokens），截至 <span id="price-date">—</span>。按每条账本记录分别计算后求和；超过模型阈值的请求使用高上下文价。Reasoning 计入 Output。Claude cache write 按 5 分钟价格估算；Gemini 缓存存储时长、音频/图像、工具费用及订阅折扣未计入。未匹配模型或无法定价的记录单独列为未计价，不当作零费用。历史账本按此版价格重估。</p><div id="price-table" class="table-scroll" tabindex="0" role="region" aria-label="公开 API 价格表，可横向滚动"></div></details>
       </div>
     </section>
 

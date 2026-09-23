@@ -79,6 +79,12 @@ th, td { padding: 12px 9px; border-bottom: 1px solid var(--border); text-align: 
 th { color: var(--muted); font-weight: 600; }
 th:first-child, th:nth-child(2), td:first-child, td:nth-child(2) { text-align: left; }
 td:nth-child(2) { max-width: 220px; overflow-wrap: anywhere; white-space: normal; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.price-details { margin-top: 28px; border-top: 1px solid var(--border); padding-top: 18px; }
+.price-details summary { width: fit-content; cursor: pointer; font-size: 14px; font-weight: 600; }
+.price-details .hint { margin-top: 14px; }
+.price-details table { min-width: 790px; }
 tbody tr:hover { background: var(--hover); }
 .lower-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; gap: 16px; margin-top: 24px; }
 .row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); padding: 10px 0; font-size: 13px; }

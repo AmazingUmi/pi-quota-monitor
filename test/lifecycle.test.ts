@@ -100,11 +100,7 @@ it("opens the console in RPC mode, hides only its own footer status, and release
   const ctx = {
     mode: "rpc", hasUI: true,
     ui: { setStatus: (key: string, text?: string) => statuses.push({ key, text }), notify: (message: string) => notices.push(message) },
-    sessionManager: { getBranch: () => [], getEntries: () => [
-      { type: "message", message: { role: "assistant", usage: { cost: { total: 0.25 } } } },
-      { type: "compaction", usage: { cost: { total: 0.5 } } },
-      { type: "message", message: { role: "toolResult", usage: { cost: { total: 0.06 } } } },
-    ] },
+    sessionManager: { getBranch: () => [] },
     getContextUsage: () => ({ tokens: 70_720, contextWindow: 272_000, percent: 26 }),
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
   } as unknown as ExtensionContext;
@@ -119,7 +115,8 @@ it("opens the console in RPC mode, hides only its own footer status, and release
   expect(response.status).toBe(200);
   const payload = await response.json() as Record<string, unknown>;
   expect(payload).toHaveProperty("usage");
-  expect(payload.session).toEqual({ costUsd: 0.81, context: { tokens: 70720, contextWindow: 272000, percent: 26 } });
+  expect(payload.context).toEqual({ tokens: 70720, contextWindow: 272000, percent: 26 });
+  expect(payload).not.toHaveProperty("session");
   expect(payload).not.toHaveProperty("daily");
   await fire("session_shutdown");
   cleanup.pop();

@@ -35,6 +35,24 @@ it("groups all dates by provider and model, sorts by ledger total, and never add
   aggregator.stop();
 });
 
+it("sums per-record API-price estimates and keeps unknown models unpriced", async () => {
+  const dir = await fixture();
+  const path = join(dir, `usage-${day}.jsonl`);
+  await writeFile(path, line({ ...entry(day, "openai-codex", "gpt-6-sol"), input: 1_000_000, output: 100_000, reasoning: 50_000,
+    cacheRead: 200_000, cacheWrite: 0, totalTokens: 1_300_000 }) + line(entry(day, "antigravity", "unknown")));
+  const aggregator = new UsageAggregator(dir);
+  await aggregator.refresh();
+  const { pricing, models } = aggregator.state();
+  expect(pricing).toMatchObject({ pricedRecords: 1, unpricedRecords: 1, unpricedTokens: 17 });
+  expect(pricing.estimatedCostUsd).toBeCloseTo((1_000_000 * 4 + 200_000 * 0.4 + 100_000 * 15) / 1e6);
+  expect(models.find((item) => item.model === "unknown")).toMatchObject({ pricedRecords: 0, unpricedRecords: 1, estimatedCostUsd: 0 });
+  await aggregator.refresh();
+  expect(aggregator.state().pricing).toEqual(pricing);
+  const restarted = new UsageAggregator(dir);
+  await restarted.refresh();
+  expect(restarted.state().pricing).toEqual(pricing);
+});
+
 it("holds incomplete lines, skips damaged records, and processes external appends exactly once", async () => {
   const dir = await fixture();
   const path = join(dir, `usage-${day}.jsonl`);

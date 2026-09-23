@@ -5,6 +5,9 @@ let latest;
 let control;
 let busy = false;
 
+function money(value) {
+  return `$${value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
+}
 function percent(value) {
   return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "—";
 }
@@ -125,6 +128,57 @@ function renderChart() {
   chart.append(svg);
   if (!total) notice(chart, "所选时间与模型暂无 Token 记录。");
 }
+function renderPriceTable(pricing) {
+  $("price-date").textContent = pricing.asOf;
+  const container = $("price-table");
+  if (container.dataset.version === pricing.asOf) return;
+  container.dataset.version = pricing.asOf;
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const header = document.createElement("tr");
+  for (const label of ["Provider", "模型 / 官方来源", "Input", "Cache read", "Cache write", "Output", "高上下文阈值"]) {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = label;
+    header.append(th);
+  }
+  head.append(header);
+  table.append(head);
+  const body = document.createElement("tbody");
+  for (const item of pricing.catalog) {
+    const tr = document.createElement("tr");
+    const provider = document.createElement("td");
+    provider.textContent = item.provider;
+    const model = document.createElement("td");
+    const link = document.createElement("a");
+    link.href = item.source;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = item.model;
+    model.append(link);
+    tr.append(provider, model);
+    for (const value of [item.rates.input, item.rates.cacheRead, item.rates.cacheWrite, item.rates.output,
+      item.longContext ? `> ${Number(item.longContext.threshold).toLocaleString()} tokens` : "—"]) {
+      const td = document.createElement("td");
+      td.textContent = value === undefined ? "—" : String(value);
+      tr.append(td);
+    }
+    body.append(tr);
+    if (item.longContext) {
+      const elevated = document.createElement("tr");
+      for (const text of [item.provider, `${item.model} · 高上下文`, item.longContext.rates.input,
+        item.longContext.rates.cacheRead, item.longContext.rates.cacheWrite ?? "—",
+        item.longContext.rates.output, `> ${Number(item.longContext.threshold).toLocaleString()} tokens`]) {
+        const td = document.createElement("td");
+        td.textContent = String(text);
+        elevated.append(td);
+      }
+      body.append(elevated);
+    }
+  }
+  table.append(body);
+  container.replaceChildren(table);
+}
 function render() {
   if (!latest) return;
   const codex = latest.codex;
@@ -150,9 +204,12 @@ function render() {
   notice(providers, agy.error ? `Antigravity：${agy.error}${agy.value ? "（保留上次成功结果）" : ""}` : "");
   const usage = latest.usage;
   $("overview-tokens").textContent = Number(usage.totals.totalTokens).toLocaleString();
-  const session = latest.session;
-  $("overview-cost").textContent = typeof session.costUsd === "number" ? `$${session.costUsd.toFixed(2)}` : "—";
-  const context = session.context;
+  const pricing = usage.pricing;
+  $("overview-cost").textContent = pricing.pricedRecords ? money(pricing.estimatedCostUsd) : "—";
+  $("overview-cost-detail").textContent = pricing.unpricedRecords
+    ? `部分估算 · ${pricing.unpricedRecords.toLocaleString()} 条未计价（${pricing.unpricedTokens.toLocaleString()} tokens）`
+    : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录";
+  const context = latest.context;
   $("overview-context").textContent = typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : "—";
   $("overview-context-detail").textContent = context ? `${context.tokens === null ? "未知" : Number(context.tokens).toLocaleString()} / ${Number(context.contextWindow).toLocaleString()} tokens` : "当前模型未提供上下文窗口";
   const columns = [["Input", "input"], ["Output", "output"], ["Reasoning", "reasoning"], ["Cache read", "cacheRead"], ["Cache write", "cacheWrite"], ["Total tokens", "totalTokens"]];
@@ -160,6 +217,7 @@ function render() {
   tokens.replaceChildren();
   if (usage.stale) notice(tokens, usage.error || "Token 汇总已过期，显示上次有效结果");
   if (usage.invalidRecords) notice(tokens, `已跳过 ${usage.invalidRecords.toLocaleString()} 条损坏记录。`);
+  if (pricing.unpricedRecords) notice(tokens, `${pricing.unpricedRecords.toLocaleString()} 条用量没有可靠价格，估算费用未覆盖这些记录。`);
   if (!usage.records) notice(tokens, "暂无本插件记录的 Token 用量。");
   const total = document.createElement("div");
   total.className = "token-total";
@@ -194,7 +252,7 @@ function render() {
     table.append(caption);
     const head = document.createElement("thead");
     const header = document.createElement("tr");
-    for (const label of ["Provider", "Model", ...columns.map(([name]) => name)]) {
+    for (const label of ["Provider", "Model", ...columns.map(([name]) => name), "估算费用 USD"]) {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;
@@ -205,7 +263,8 @@ function render() {
     const body = document.createElement("tbody");
     for (const item of usage.models) {
       const tr = document.createElement("tr");
-      for (const text of [item.provider, item.model, ...columns.map(([, key]) => Number(item[key]).toLocaleString())]) {
+      for (const text of [item.provider, item.model, ...columns.map(([, key]) => Number(item[key]).toLocaleString()),
+        item.pricedRecords ? `${money(item.estimatedCostUsd)}${item.unpricedRecords ? " + 未计价" : ""}` : "未计价"]) {
         const cell = document.createElement("td");
         cell.textContent = text;
         tr.append(cell);
@@ -217,6 +276,7 @@ function render() {
   } else {
     models.textContent = "暂无模型明细";
   }
+  renderPriceTable(pricing);
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }

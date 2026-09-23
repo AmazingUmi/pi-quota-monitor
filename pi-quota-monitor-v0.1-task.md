@@ -1,220 +1,44 @@
-# Pi Quota Monitor — v0.1 任务书
+# Pi Quota Monitor — 下一阶段 Console 任务
 
-## 1. 目标
+已完成功能和既有数据、安全约束见 [README.md](README.md)。本文只记录**尚未施工**的布局与配置改造，不重复以前已完成的统计、趋势图、费用估算等需求。
 
-开发一个轻量级 Pi 插件，用于**常驻显示 OpenAI Codex 与 Antigravity 的剩余额度**，并附带本地 Token 使用统计。
+## 目标与信息架构
 
-核心原则：
+Console 自上而下只有三个顶层内容区：**概述 → 用量 → 剩余额度**。不再在底部另起与这三个区平级的“Provider 状态”和“自动刷新间隔”区。保留已有数据口径、操作能力、浅色/深色、窄屏和安全约束。
 
-- 不依赖用户手动执行查询命令。
-- 额度查询与 Token 统计分离。
-- 优先复用现有 Pi 凭据，不保存访问令牌。
-- v0.1 只服务当前实际使用场景，不扩展为通用 Provider 框架。
+### 1. 概述：备注收起，不挤占首屏
 
----
+- 保留全账本 Tokens、估算费用、当前模型上下文占用等关键指标。它们的口径不同，标签必须明确；估算费用不是订阅实付或账户预算上限。
+- 现有“本地用量账本”大面板及其说明，改为紧凑的一行摘要与可展开的 **“?” / 关于数据** 说明。默认收起；点击和键盘均可展开，不能仅靠悬停。展开后保留插件启用前历史不覆盖、估算费用限制、Reasoning 不重复计数、本机访问与隐私等必要解释。不要为了缩短页面而删除重要警示。
+- 加载、空数据、未计价、过期和错误提示仍在相关指标附近可见；它们不是应当藏进“?”的备注。
 
-## 2. v0.1 功能范围
+### 2. 用量：聚合和趋势集中展示
 
-### 2.1 OpenAI Codex
+- 将现有总量、24 小时/30 天趋势与全部模型/指定 `(provider, model)` 选择、模型明细及价格表保留在同一个“用量”区。概述保留关键数字，用量区负责解释和钻取，不重复铺排大段说明。
+- 价格表与详细估算口径继续采用可展开内容。趋势图和表格的计算与数据口径不因布局调整而改变。
 
-参考：
+### 3. 剩余额度：先按 Provider 分块
 
-- `narumiruna/pi-extensions/packages/pi-usage`
-- `agegr/pi-web/lib/provider-usage.ts`
+- 顶层额度展示改为 **OpenAI Codex** 与 **Antigravity** 两个 Provider 块，而不是 Codex 5 小时、Codex 每周、AGY Gemini、AGY Claude/GPT 四个并列卡片。
+- Codex 块内显示 5 小时/每周窗口、重置倒计时和计划信息（若有）。Antigravity 块内按返回的 quota groups/模型显示 Gemini、Claude/GPT 等组及其窗口；不假定所有组都有固定的 5 小时/每周窗口。没有窗口时显示未知/无数据，不显示伪造的 0%。旧版 OAuth 的模型回退仍应保留。
+- 每个 Provider 的最近成功时间、查询错误与保留上次成功结果的提示要有清晰归属；手动刷新额度仍可用。两块在窄屏下顺序堆叠。
 
-实现：
+### 4. 同一额度区内的“状态与设置”
 
-- 查询 5h 剩余额度。
-- 查询 weekly 剩余额度。
-- 显示 reset countdown。
-- 使用当前 Pi `openai-codex` 登录凭据。
-- 仅向官方 `chatgpt.com` usage endpoint 发送凭据。
+将目前分散的 **Provider 状态、自动刷新间隔** 与新增 **pi-web 状态栏显示开关** 合并为剩余额度区内的一个“状态与设置”子面板（可折叠，但不能成为第四个顶层区）：
 
-### 2.2 Antigravity
+- 只读部分列出各 Provider 的查询状态、最近成功时间、错误；避免与 Provider 额度块重复同一长列表。
+- 保留后台刷新间隔设置（60–3600 秒）与立即刷新操作，明确页面每 5 秒读取本地缓存不会额外调用 Provider API。
+- 增加两个独立开关：**在 pi-web 扩展状态栏显示 OAI**、**在 pi-web 扩展状态栏显示 AGY**。默认都开启，以兼容当前行为。开关只控制该扩展状态文本中的对应 Provider 片段；不关闭额度查询、不隐藏 Console 中的 Provider 块、不改 `/quota` 输出。两个都关闭时仍保留现有 Token 状态片段，不输出空 Provider 占位符或多余分隔符。
+- 新配置持久化到插件的 `config.json`；旧配置缺少开关时使用开启默认值。保存成功后当前 pi-web（RPC）状态栏立即更新，重新加载会话后仍有效；保存失败时保留旧设置并提示。TUI 状态栏保持现有行为，除非后续明确要求联动。
+- **现有冲突须一并解决：**当前在 pi-web 执行 `/quota console` 会整体隐藏本扩展的 RPC 状态栏。新增开关若保持此行为将无法观察，因此 Console 打开后也应按开关继续显示所选状态片段；不影响其他扩展的状态项。Console 关闭/会话退出时只清理自己的状态项和服务。
 
-参考：
+## 实现边界与验收
 
-- `Rahularya01/pi-antigravity`
+- 先调整 DOM/样式及文案，再把两个布尔配置贯通到配置校验、状态格式化、Console API 和保存操作。写接口沿用本机 Host、Origin、会话 nonce 校验与小请求体限制；API 不返回凭据或原始账本。不要读取或修改 pi-web 的私有文件/CSS/主题。
+- 桌面与窄屏均能清楚辨认三个顶层区、两个 Provider 块与“状态与设置”；“?”、折叠面板、表单和开关可用键盘操作，焦点可见。无额度、查询失败、损坏账本与未知价格仍有明确反馈。
+- 验收状态栏开关的四种组合、默认值/旧配置迁移、保存失败回滚、重新加载持久化，以及 Console 已开启时的 RPC 显示；验证关闭 Provider 显示不停止刷新，`/quota` 和 TUI 原行为不变。额度刷新、自动间隔、趋势与明细继续正常，`npm run check` 通过。
 
-实现：
+## 分析结论
 
-- 查询 Google AI / Antigravity 当前订阅层级。
-- 查询 Gemini quota。
-- 查询 Claude/GPT shared quota。
-- 查询 reset time。
-- 必要时使用 per-model `remainingFraction` 作为补充信息。
-
-### 2.3 Token 统计
-
-监听 Pi：
-
-```ts
-pi.on("message_end", ...)
-```
-
-记录：
-
-- input
-- output
-- reasoning
-- cacheRead
-- cacheWrite
-- totalTokens
-- provider
-- model
-
-v0.1 至少提供：
-
-- 当前 session 累计。
-- 当日累计。
-
----
-
-## 3. 状态栏
-
-默认常驻显示，例如：
-
-```text
-OAI 73%/61% | AGY G84% C67% | ↑284k ↓37k
-```
-
-语义：
-
-- `OAI 73%/61%`：Codex 5h / weekly remaining。
-- `AGY G84%`：Gemini quota remaining。
-- `C67%`：Claude/GPT shared quota remaining。
-- `↑`：input tokens。
-- `↓`：output tokens。
-
-空间允许时显示 reset countdown。
-
----
-
-## 4. 自动刷新策略
-
-触发刷新：
-
-1. `session_start`：立即查询。
-2. `model_select`：切换 Provider 后立即查询。
-3. `message_end`：缓存超过约 60 秒时刷新相关 Provider。
-4. 定时兜底：每 2–5 分钟刷新。
-5. 遇到 429 / quota error：立即刷新额度状态。
-
-要求：
-
-- UI 始终保留最近一次成功结果。
-- 请求失败不得清空有效缓存。
-- 避免重复并发查询。
-- `/reload` / session 切换后不得继续使用 stale `ExtensionContext`。
-
----
-
-## 5. 建议结构
-
-```text
-pi-quota-monitor/
-├── src/
-│   ├── index.ts
-│   ├── providers/
-│   │   ├── codex.ts
-│   │   └── antigravity.ts
-│   ├── tokens/
-│   │   ├── collector.ts
-│   │   └── store.ts
-│   ├── scheduler.ts
-│   ├── statusline.ts
-│   └── types.ts
-└── test/
-```
-
----
-
-## 6. 本地数据
-
-建议：
-
-```text
-~/.pi/agent/pi-quota-monitor/
-├── usage-YYYY-MM-DD.jsonl
-└── config.json
-```
-
-不得持久化：
-
-- OAuth access token
-- refresh token
-- API key
-
-Token ledger 仅记录统计数据。
-
----
-
-## 7. 命令
-
-保留最少命令：
-
-```text
-/quota
-```
-
-查看完整额度与 Token 统计。
-
-```text
-/quota refresh
-```
-
-强制刷新全部额度。
-
-日常使用不依赖这些命令。
-
----
-
-## 8. 明确不做
-
-v0.1 不实现：
-
-- 通用 Provider 插件框架。
-- OpenRouter / MiniMax / Kimi / DeepSeek 等其他 Provider。
-- Web Dashboard。
-- SQLite。
-- 云端同步。
-- Token 消耗反推订阅额度。
-- 高频轮询 Provider API。
-
----
-
-## 9. 验收标准
-
-完成以下项目即可认为 v0.1 可用：
-
-- [ ] Pi 启动后自动出现状态栏。
-- [ ] Codex 5h / weekly quota 可自动刷新。
-- [ ] Antigravity Gemini / Claude-GPT quota 可自动刷新。
-- [ ] reset time 正确解析。
-- [ ] `message_end` 后 Token 累计正确。
-- [ ] session / daily Token 统计可查看。
-- [ ] Provider 查询失败时保留上一份成功结果。
-- [ ] 切换模型后状态栏能正确切换/更新。
-- [ ] `/reload` 后无 stale context / timer 异常。
-- [ ] 凭据不会写入插件自己的持久化文件。
-
----
-
-## 10. 实现优先级
-
-```text
-P0  Codex quota + statusline
-P0  Antigravity quota + statusline
-P0  refresh scheduler
-
-P1  Token collector
-P1  daily ledger
-P1  /quota detail view
-
-P2  UI polish
-P2  tests / error classification
-```
-
-v0.1 的核心定义：
-
-> **OpenAI Codex + Antigravity 实时剩余额度常驻显示，并附带 Pi 本地 Token 使用统计。**
+核心不是新增第四套数据，而是**重排信息层级**：概述只看关键数、用量看统计、剩余额度看 Provider；解释折叠，状态和操作合并。状态栏显示开关与查询开关必须分离，且必须消除“打开 Console 就隐藏整个 RPC 状态”的旧行为，否则配置功能虽能保存却对 pi-web 用户不可见。

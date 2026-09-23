@@ -5,13 +5,18 @@ import { configDirectory } from "../config.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { localDate } from "./store.js";
+import { estimateRecordCost, PRICE_DATE } from "./pricing.js";
 
-export interface ModelUsage extends TokenTotals { provider: string; model: string }
+export interface ModelUsage extends TokenTotals {
+  provider: string; model: string;
+  estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number; unpricedTokens: number;
+}
 export interface TimeBucket { bucket: string; provider: string; model: string; totalTokens: number }
 export interface UsageSummary {
   totals: TokenTotals;
   models: ModelUsage[];
   timeline: { hours: TimeBucket[]; days: TimeBucket[]; today: string; currentHour: number };
+  pricing: { asOf: string; estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number; unpricedTokens: number };
   records: number;
   invalidRecords: number;
   updatedAt?: number;
@@ -48,7 +53,7 @@ function validRecord(value: unknown, day: string): value is TokenUsageRecord {
 /** Incremental, transactional ledger reader. A cursor is committed only after the full scan succeeds. */
 export class UsageAggregator {
   private files = new Map<string, FileState>();
-  private summary: UsageSummary = { totals: emptyTotals(), models: [], timeline: { hours: [], days: [], today: localDate(Date.now()), currentHour: Math.floor(Date.now() / 3_600_000) * 3_600_000 }, records: 0, invalidRecords: 0, stale: false };
+  private summary: UsageSummary = { totals: emptyTotals(), models: [], timeline: { hours: [], days: [], today: localDate(Date.now()), currentHour: Math.floor(Date.now() / 3_600_000) * 3_600_000 }, pricing: { asOf: PRICE_DATE, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 }, records: 0, invalidRecords: 0, stale: false };
   private inFlight?: Promise<void>;
   private timer?: NodeJS.Timeout;
 
@@ -134,7 +139,12 @@ export class UsageAggregator {
       invalidRecords += state.invalidRecords;
       for (const item of state.models.values()) {
         const key = keyFor(item.provider, item.model);
-        models.set(key, { ...item, ...accumulate(models.get(key) ?? emptyTotals(), item) });
+        const old = models.get(key);
+        models.set(key, { ...item, ...accumulate(old ?? emptyTotals(), item),
+          estimatedCostUsd: (old?.estimatedCostUsd ?? 0) + item.estimatedCostUsd,
+          pricedRecords: (old?.pricedRecords ?? 0) + item.pricedRecords,
+          unpricedRecords: (old?.unpricedRecords ?? 0) + item.unpricedRecords,
+          unpricedTokens: (old?.unpricedTokens ?? 0) + item.unpricedTokens });
         if (days.has(day)) {
           const bucketKey = JSON.stringify([day, item.provider, item.model]);
           const prior = daily.get(bucketKey);
@@ -150,8 +160,14 @@ export class UsageAggregator {
     }
     const sorted = [...models.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
     for (const item of sorted) Object.assign(totals, accumulate(totals, item));
+    const pricing = sorted.reduce((result, item) => ({ asOf: PRICE_DATE,
+      estimatedCostUsd: result.estimatedCostUsd + item.estimatedCostUsd,
+      pricedRecords: result.pricedRecords + item.pricedRecords,
+      unpricedRecords: result.unpricedRecords + item.unpricedRecords,
+      unpricedTokens: result.unpricedTokens + item.unpricedTokens,
+    }), { asOf: PRICE_DATE, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 });
     const order = (a: TimeBucket, b: TimeBucket) => a.bucket.localeCompare(b.bucket) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
-    return { files, summary: { totals, models: sorted, timeline: { hours: [...hourly.values()].sort(order), days: [...daily.values()].sort(order), today: localDate(now), currentHour: firstHour + 23 * 3_600_000 }, records, invalidRecords, updatedAt: Date.now(), stale: false } };
+    return { files, summary: { totals, models: sorted, timeline: { hours: [...hourly.values()].sort(order), days: [...daily.values()].sort(order), today: localDate(now), currentHour: firstHour + 23 * 3_600_000 }, pricing, records, invalidRecords, updatedAt: Date.now(), stale: false } };
   }
 
   private consume(state: FileState, chunk: Buffer, day: string): void {
@@ -166,8 +182,13 @@ export class UsageAggregator {
           const value: unknown = JSON.parse(line.toString("utf8"));
           if (!validRecord(value, day)) throw new Error("Invalid record");
           const key = keyFor(value.provider, value.model);
-          const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals() };
-          state.models.set(key, { ...prior, ...accumulate(prior, value) });
+          const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
+          const cost = estimateRecordCost(value);
+          state.models.set(key, { ...prior, ...accumulate(prior, value),
+            estimatedCostUsd: prior.estimatedCostUsd + (cost ?? 0),
+            pricedRecords: prior.pricedRecords + (cost === undefined ? 0 : 1),
+            unpricedRecords: prior.unpricedRecords + (cost === undefined ? 1 : 0),
+            unpricedTokens: prior.unpricedTokens + (cost === undefined ? value.totalTokens : 0) });
           const hour = Math.floor(value.timestamp / 3_600_000) * 3_600_000;
           if (hour >= Date.now() - 25 * 3_600_000) {
             const bucket = String(hour);
