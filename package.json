@@ -1,8 +1,13 @@
 {
   "name": "pi-quota-monitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Real-time OpenAI Codex and Antigravity quota status for Pi",
-  "keywords": ["pi-package", "pi-extension", "quota", "pi-web"],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "quota",
+    "pi-web"
+  ],
   "type": "module",
   "license": "MIT",
   "files": [

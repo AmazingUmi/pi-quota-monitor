@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
+import { QuotaDashboard } from "./dashboard.js";
 import { queryAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
 import { RefreshScheduler } from "./scheduler.js";
@@ -31,6 +32,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let generation = 0;
   let config: MonitorConfig = { ...DEFAULT_CONFIG };
   let scheduler: RefreshScheduler | undefined;
+  let dashboard: QuotaDashboard | undefined;
   let abortController: AbortController | undefined;
   let currentContext: ExtensionContext | undefined;
   let sessionTotals = emptyTotals();
@@ -49,7 +51,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!active || !ctx.hasUI) return;
     // RPC setStatus is forwarded by pi-web; TUI uses its native status footer.
     try {
-      ctx.ui.setStatus(STATUS_KEY, formatStatus(codex, antigravity, sessionTotals, config.showReset));
+      ctx.ui.setStatus(STATUS_KEY, dashboard && ctx.mode === "rpc"
+        ? undefined
+        : formatStatus(codex, antigravity, sessionTotals, config.showReset));
     } catch {
       // A closing/replaced UI must not turn a completed quota query into an unhandled rejection.
     }
@@ -102,6 +106,16 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
 
   async function refreshAll(ctx: ExtensionContext, force = false): Promise<void> {
     await Promise.all([refresh("openai-codex", ctx, force), refresh("antigravity", ctx, force)]);
+  }
+
+  async function setIntervalSeconds(seconds: number, epoch: number): Promise<void> {
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    const next = { ...config, refreshIntervalSeconds: seconds };
+    await saveConfig(next);
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    config = next;
+    scheduler?.updateInterval(seconds * 1000);
+    if (currentContext) render(currentContext);
   }
 
   async function updateDailyDate(epoch: number): Promise<void> {
@@ -192,11 +206,38 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("quota", {
-    description: "View quota and token usage; /quota refresh; /quota interval <60-3600 seconds>",
+    description: "Quota details; /quota console; /quota refresh; /quota interval <60-3600 seconds>",
     handler: async (args, ctx) => {
       if (!active) return;
       const epoch = generation;
       const command = args.trim();
+      if (command === "console") {
+        if (!dashboard) {
+          dashboard = new QuotaDashboard({
+            state: () => ({ codex, antigravity, session: sessionTotals, daily: dailyTotals, config, updatedAt: Date.now() }),
+            refresh: async () => {
+              if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
+              await refreshAll(currentContext, true);
+              await updateDailyDate(epoch);
+            },
+            setInterval: (seconds) => setIntervalSeconds(seconds, epoch),
+          });
+        }
+        try {
+          const url = await dashboard.start();
+          if (!live(epoch)) return;
+          render(ctx); // Remove our RPC footer entry; other extensions keep theirs.
+          const message = `额度控制台：${url}（仅本机访问；本会话结束后关闭）`;
+          if (ctx.hasUI) ctx.ui.notify(message, "info");
+          else console.log(message);
+        } catch {
+          if (!live(epoch)) return;
+          dashboard = undefined;
+          render(ctx);
+          ctx.ui.notify("无法启动本地额度控制台。", "error");
+        }
+        return;
+      }
       if (command === "refresh") {
         await refreshAll(ctx, true);
       } else if (command.startsWith("interval ")) {
@@ -206,15 +247,10 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           ctx.ui.notify("Interval must be 60–3600 seconds.", "warning");
           return;
         }
-        const next = { ...config, refreshIntervalSeconds: seconds };
-        try { await saveConfig(next); }
-        catch { ctx.ui.notify("Unable to save refresh interval.", "error"); return; }
-        if (!live(epoch)) return;
-        config = next;
-        scheduler?.updateInterval(seconds * 1000);
-        render(ctx);
+        try { await setIntervalSeconds(seconds, epoch); }
+        catch { if (live(epoch)) ctx.ui.notify("Unable to save refresh interval.", "error"); return; }
       } else if (command) {
-        ctx.ui.notify("Use /quota, /quota refresh, or /quota interval <60-3600>.", "warning");
+        ctx.ui.notify("Use /quota, /quota console, /quota refresh, or /quota interval <60-3600>.", "warning");
         return;
       }
       await updateDailyDate(epoch);
@@ -232,6 +268,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     abortController = undefined;
     scheduler?.stop();
     scheduler = undefined;
+    const closingDashboard = dashboard;
+    dashboard = undefined;
+    void closingDashboard?.stop();
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
     currentContext = undefined;

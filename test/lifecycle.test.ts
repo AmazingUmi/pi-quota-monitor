@@ -54,6 +54,34 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   expect(statuses.at(-1)).toBeUndefined();
 });
 
+it("opens the console in RPC mode, hides only its own footer status, and releases the port", async () => {
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  let command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  const statuses: Array<{ key: string; text?: string }> = [];
+  const notices: string[] = [];
+  quotaMonitor({
+    on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
+    registerCommand: (_name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { command = options.handler; },
+  } as unknown as ExtensionAPI);
+  const ctx = {
+    mode: "rpc", hasUI: true,
+    ui: { setStatus: (key: string, text?: string) => statuses.push({ key, text }), notify: (message: string) => notices.push(message) },
+    sessionManager: { getBranch: () => [] },
+    modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
+  } as unknown as ExtensionContext;
+  const fire = async (name: string) => handlers.get(name)?.({}, ctx);
+  cleanup.push(() => { void fire("session_shutdown"); });
+  await fire("session_start");
+  await command?.("console", ctx);
+  const url = notices.at(-1)?.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
+  expect(url).toBeDefined();
+  expect(statuses.at(-1)).toEqual({ key: "pi-quota-monitor", text: undefined });
+  expect((await fetch(`${url}/api/state`)).status).toBe(200);
+  await fire("session_shutdown");
+  cleanup.pop();
+  await vi.waitFor(async () => { await expect(fetch(`${url}/api/state`)).rejects.toThrow(); });
+});
+
 it("ignores a provider result that arrives after shutdown", async () => {
   const { queryCodexQuota } = await import("../src/providers/codex.js");
   let resolve!: (value: Awaited<ReturnType<typeof queryCodexQuota>>) => void;
