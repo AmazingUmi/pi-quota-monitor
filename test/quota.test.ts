@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseCodexQuota, queryCodexQuota } from "../src/providers/codex.js";
 import { parseAntigravityQuota, parseNativeAntigravityQuota, queryAntigravityQuota } from "../src/providers/antigravity.js";
 import { emptyTotals, tokenRecord } from "../src/tokens/collector.js";
 import { formatStatus, groupWindow } from "../src/statusline.js";
-import { normalizeConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, configPath, loadConfig, normalizeConfig, saveConfig } from "../src/config.js";
 
 const now = Date.parse("2026-06-01T12:00:00Z");
 
@@ -144,4 +147,45 @@ it("bounds user-configurable refresh interval", () => {
   expect(normalizeConfig({ refreshIntervalSeconds: 60 }).refreshIntervalSeconds).toBe(60);
   expect(normalizeConfig({ refreshIntervalSeconds: 10 }).refreshIntervalSeconds).toBe(180);
   expect(normalizeConfig({ refreshIntervalSeconds: 3601 }).refreshIntervalSeconds).toBe(180);
+});
+
+it("defaults missing statusbar options on for old configs and validates explicit booleans", () => {
+  expect(normalizeConfig({}).showOaiInStatusbar).toBe(true);
+  expect(normalizeConfig({}).showAgyInStatusbar).toBe(true);
+  expect(normalizeConfig({ showOaiInStatusbar: false, showAgyInStatusbar: "false" })).toMatchObject({
+    showOaiInStatusbar: false, showAgyInStatusbar: true,
+  });
+});
+
+it("persists statusbar settings in config and reloads them", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-quota-config-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  try {
+    expect(await loadConfig()).toEqual(DEFAULT_CONFIG);
+    const changed = { ...DEFAULT_CONFIG, showOaiInStatusbar: false, showAgyInStatusbar: true };
+    await saveConfig(changed);
+    expect(JSON.parse(await readFile(configPath(), "utf8"))).toEqual(changed);
+    expect(await loadConfig()).toEqual(changed);
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("supports all RPC statusbar provider combinations without empty separators", () => {
+  const codex = { value: { capturedAt: now, fiveHour: { label: "5h", remainingPercent: 73 }, weekly: { label: "weekly", remainingPercent: 61 } } };
+  const agy = { value: { capturedAt: now, groups: [
+    { name: "Gemini", windows: [{ label: "5h", remainingPercent: 84 }, { label: "Weekly", remainingPercent: 67 }] },
+  ], models: [] } };
+  const totals = emptyTotals();
+  expect(formatStatus(codex, agy, totals, false, now, { showOai: true, showAgy: true }))
+    .toBe("OAI 73%/61% | AGY 84%/67% | ↑0 ↓0");
+  expect(formatStatus(codex, agy, totals, false, now, { showOai: true, showAgy: false }))
+    .toBe("OAI 73%/61% | ↑0 ↓0");
+  expect(formatStatus(codex, agy, totals, false, now, { showOai: false, showAgy: true }))
+    .toBe("AGY 84%/67% | ↑0 ↓0");
+  expect(formatStatus(codex, agy, totals, false, now, { showOai: false, showAgy: false }))
+    .toBe("↑0 ↓0");
 });

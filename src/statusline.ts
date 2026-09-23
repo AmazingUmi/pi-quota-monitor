@@ -43,16 +43,21 @@ export function formatStatus(
   totals: TokenTotals,
   showReset: boolean,
   now = Date.now(),
+  visibility: { showOai?: boolean; showAgy?: boolean } = {},
 ): string {
   const geminiFiveHour = geminiTimedWindow(antigravity.value, "fiveHour");
   const geminiWeekly = geminiTimedWindow(antigravity.value, "weekly");
   const codexReset = showReset ? countdown(codex.value?.fiveHour?.resetAt, now) : undefined;
   const geminiReset = showReset ? countdown(geminiFiveHour?.resetAt, now) : undefined;
-  return [
-    `OAI ${percentage(codex.value?.fiveHour?.remainingPercent)}/${percentage(codex.value?.weekly?.remainingPercent)}${codexReset ? ` ↻${codexReset}` : ""}`,
-    `AGY ${percentage(geminiFiveHour?.remainingPercent)}/${percentage(geminiWeekly?.remainingPercent)}${geminiReset ? ` ↻${geminiReset}` : ""}`,
-    `↑${compactTokens(totals.input)} ↓${compactTokens(totals.output)}`,
-  ].join(" | ");
+  const parts: string[] = [];
+  if (visibility.showOai !== false) {
+    parts.push(`OAI ${percentage(codex.value?.fiveHour?.remainingPercent)}/${percentage(codex.value?.weekly?.remainingPercent)}${codexReset ? ` ↻${codexReset}` : ""}`);
+  }
+  if (visibility.showAgy !== false) {
+    parts.push(`AGY ${percentage(geminiFiveHour?.remainingPercent)}/${percentage(geminiWeekly?.remainingPercent)}${geminiReset ? ` ↻${geminiReset}` : ""}`);
+  }
+  parts.push(`↑${compactTokens(totals.input)} ↓${compactTokens(totals.output)}`);
+  return parts.join(" | ");
 }
 
 function formatWindow(window: QuotaWindow | undefined): string {

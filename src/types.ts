@@ -58,4 +58,6 @@ export interface MonitorConfig {
   staleAfterSeconds: number;
   requestTimeoutSeconds: number;
   showReset: boolean;
+  showOaiInStatusbar: boolean;
+  showAgyInStatusbar: boolean;
 }

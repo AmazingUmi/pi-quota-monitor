@@ -19,6 +19,7 @@ export interface DashboardActions {
   state(): DashboardState;
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
+  setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>): Promise<void>;
 }
 
 const HOST = "127.0.0.1";
@@ -144,7 +145,8 @@ export class QuotaDashboard {
         };
         reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
-          config: { refreshIntervalSeconds: config.refreshIntervalSeconds }, updatedAt, control: this.nonce }));
+          config: { refreshIntervalSeconds: config.refreshIntervalSeconds,
+            showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
       }
@@ -166,6 +168,21 @@ export class QuotaDashboard {
         return;
       }
       await this.actions.setInterval(seconds);
+    } else if (pathname === "/api/statusbar") {
+      let body: unknown;
+      try { body = await readSmallJson(req); }
+      catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
+      const allowed = new Set(["showOaiInStatusbar", "showAgyInStatusbar"]);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        reply(res, 400, JSON.stringify({ error: "Invalid statusbar settings" }));
+        return;
+      }
+      const entries = Object.entries(body);
+      if (!entries.length || entries.some(([key, value]) => !allowed.has(key) || typeof value !== "boolean")) {
+        reply(res, 400, JSON.stringify({ error: "Statusbar settings must contain boolean OAI/AGY options" }));
+        return;
+      }
+      await this.actions.setStatusbar(Object.fromEntries(entries) as Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>);
     } else {
       reply(res, 404, JSON.stringify({ error: "Not found" }));
       return;

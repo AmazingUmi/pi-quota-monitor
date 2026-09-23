@@ -18,17 +18,6 @@ function countdown(resetAt) {
     : minutes >= 60 ? `${Math.floor(minutes / 60)}小时 ${minutes % 60}分钟` : `${minutes}分钟`;
   return `约 ${remaining}后重置`;
 }
-function groupWindow(usage, kind) {
-  if (!usage) return undefined;
-  const matches = kind === "gemini" ? /gemini/i : /claude|gpt|shared/i;
-  const windows = (usage.groups ?? []).filter((group) => matches.test(group.name))
-    .flatMap((group) => group.windows ?? []);
-  if (windows.length) return windows.reduce((a, b) => a.remainingPercent <= b.remainingPercent ? a : b);
-  const models = (usage.models ?? []).filter((model) => matches.test(`${model.modelId} ${model.displayName ?? ""}`) && typeof model.remainingPercent === "number");
-  if (!models.length) return undefined;
-  const model = models.reduce((a, b) => a.remainingPercent <= b.remainingPercent ? a : b);
-  return { remainingPercent: model.remainingPercent, resetAt: model.resetAt };
-}
 function row(parent, label, value) {
   const container = document.createElement("div");
   container.className = "row";
@@ -39,12 +28,6 @@ function row(parent, label, value) {
   container.append(left, right);
   parent.append(container);
 }
-function title(parent, value) {
-  const el = document.createElement("h3");
-  el.className = "section-title";
-  el.textContent = value;
-  parent.append(el);
-}
 function notice(parent, value) {
   if (!value) return;
   const el = document.createElement("p");
@@ -52,16 +35,123 @@ function notice(parent, value) {
   el.textContent = value;
   parent.append(el);
 }
-function card(id, window) {
-  $(id).textContent = percent(window?.remainingPercent);
-  $(`${id}-reset`).textContent = window ? countdown(window.resetAt) : "暂无额度数据";
+function quotaWindow(parent, label, window) {
+  const container = document.createElement("div");
+  container.className = "quota-window";
+  const name = document.createElement("span");
+  name.className = "label";
+  name.textContent = label;
+  const value = document.createElement("strong");
+  value.textContent = percent(window?.remainingPercent);
+  const reset = document.createElement("small");
+  reset.className = "subtle";
+  reset.textContent = window ? countdown(window.resetAt) : "未知 / 无数据";
+  if (typeof window?.resetAt === "number" && Number.isFinite(window.resetAt)) reset.dataset.resetAt = String(window.resetAt);
+  container.append(name, value, reset);
+  parent.append(container);
+}
+function queryLabel(cache, partialError = false) {
+  if (cache.error) return "查询失败";
+  if (partialError) return "部分查询失败（使用可用数据）";
+  if (cache.value) return "查询成功";
+  return cache.lastAttemptAt ? "查询中 / 尚无成功结果" : "等待首次查询";
+}
+function lastSuccess(cache) {
+  return cache.value?.capturedAt ? new Date(cache.value.capturedAt).toLocaleString() : "尚无成功查询";
+}
+function renderProviderErrors(container, cache, extraErrors = []) {
+  const messages = [
+    ...(cache.error ? [`查询错误：${cache.error}${cache.value ? "；已保留上次成功结果" : "；尚无可保留结果"}`] : []),
+    ...extraErrors.filter(Boolean).map((error) => `额度数据提示：${error}`),
+  ];
+  const fingerprint = JSON.stringify(messages);
+  if (container.dataset.messages === fingerprint) return;
+  container.dataset.messages = fingerprint;
+  container.replaceChildren();
+  for (const message of messages) notice(container, message);
+}
+function statusDetails(container, cache, extraErrors = []) {
+  row(container, "查询状态", queryLabel(cache, extraErrors.some(Boolean)));
+  row(container, "最近成功时间", lastSuccess(cache));
+  if (cache.error) notice(container, `查询错误：${cache.error}${cache.value ? "（保留上次成功结果）" : ""}`);
+  for (const error of extraErrors.filter(Boolean)) notice(container, `额度汇总错误：${error}`);
+}
+function renderCodex(cache) {
+  const result = cache.value;
+  $("codex-plan").textContent = result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
+  const windows = $("codex-windows");
+  windows.replaceChildren();
+  quotaWindow(windows, "5 小时窗口", result?.fiveHour);
+  quotaWindow(windows, "每周窗口", result?.weekly);
+  $("codex-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  renderProviderErrors($("codex-error"), cache);
+}
+function modelGroupName(model) {
+  const name = `${model.modelId} ${model.displayName ?? ""}`;
+  if (/gemini/i.test(name)) return "Gemini 模型额度（旧版回退）";
+  if (/claude|gpt/i.test(name)) return "Claude / GPT 模型额度（旧版回退）";
+  return "其他模型额度（旧版回退）";
+}
+function renderAntigravity(cache) {
+  const result = cache.value;
+  $("agy-plan").textContent = result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
+  const container = $("agy-windows");
+  container.replaceChildren();
+  const groups = result?.groups ?? [];
+  const models = result?.models ?? [];
+  if (groups.length) {
+    for (const group of groups) {
+      const section = document.createElement("section");
+      section.className = "quota-group";
+      const heading = document.createElement("h4");
+      heading.textContent = group.name;
+      section.append(heading);
+      const items = document.createElement("div");
+      items.className = "quota-windows";
+      if (group.windows?.length) {
+        for (const window of group.windows) quotaWindow(items, window.label, window);
+      } else {
+        const candidates = models.filter((model) => new RegExp(group.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(`${model.modelId} ${model.displayName ?? ""}`));
+        if (candidates.length) {
+          for (const model of candidates) quotaWindow(items, `${model.displayName ?? model.modelId} · 模型额度`, model);
+        } else {
+          quotaWindow(items, "额度窗口", undefined);
+        }
+      }
+      section.append(items);
+      container.append(section);
+    }
+  } else if (models.length) {
+    const grouped = new Map();
+    for (const model of models) {
+      const name = modelGroupName(model);
+      if (!grouped.has(name)) grouped.set(name, []);
+      grouped.get(name).push(model);
+    }
+    for (const [name, groupModels] of grouped) {
+      const section = document.createElement("section");
+      section.className = "quota-group";
+      const heading = document.createElement("h4");
+      heading.textContent = name;
+      const items = document.createElement("div");
+      items.className = "quota-windows";
+      for (const model of groupModels) quotaWindow(items, model.displayName ?? model.modelId, model);
+      section.append(heading, items);
+      container.append(section);
+    }
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = result ? "暂无额度窗口或模型额度数据。" : "尚无成功查询结果；额度数据未知。";
+    container.append(empty);
+  }
+  $("agy-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  renderProviderErrors($("agy-error"), cache, [result?.summaryError]);
 }
 function renderCountdown() {
-  if (!latest) return;
-  card("codex-five", latest.codex.value?.fiveHour);
-  card("codex-week", latest.codex.value?.weekly);
-  card("agy-gemini", groupWindow(latest.antigravity.value, "gemini"));
-  card("agy-shared", groupWindow(latest.antigravity.value, "shared"));
+  for (const reset of document.querySelectorAll("[data-reset-at]")) {
+    reset.textContent = countdown(Number(reset.dataset.resetAt));
+  }
 }
 const SVG_NS = "http://www.w3.org/2000/svg";
 function svgElement(name, attributes = {}, text) {
@@ -183,32 +273,23 @@ function render() {
   if (!latest) return;
   const codex = latest.codex;
   const agy = latest.antigravity;
-  renderCountdown();
-  const providers = $("providers");
-  providers.replaceChildren();
-  title(providers, `OpenAI Codex${codex.value?.plan ? ` · ${codex.value.plan}` : ""}`);
-  row(providers, "5 小时", percent(codex.value?.fiveHour?.remainingPercent));
-  row(providers, "每周", percent(codex.value?.weekly?.remainingPercent));
-  if (codex.value?.capturedAt) row(providers, "最近成功查询", new Date(codex.value.capturedAt).toLocaleString());
-  notice(providers, codex.error ? `Codex：${codex.error}${codex.value ? "（保留上次成功结果）" : ""}` : "");
-  title(providers, `Antigravity${agy.value?.plan ? ` · ${agy.value.plan}` : ""}`);
-  for (const group of (agy.value?.groups ?? [])) {
-    for (const window of group.windows) row(providers, `${group.name} · ${window.label}`, `${percent(window.remainingPercent)} · ${countdown(window.resetAt)}`);
-  }
-  if (!(agy.value?.groups?.length)) {
-    row(providers, "Gemini", percent(groupWindow(agy.value, "gemini")?.remainingPercent));
-    row(providers, "Claude/GPT", percent(groupWindow(agy.value, "shared")?.remainingPercent));
-  }
-  if (agy.value?.capturedAt) row(providers, "最近成功查询", new Date(agy.value.capturedAt).toLocaleString());
-  notice(providers, agy.value?.summaryError);
-  notice(providers, agy.error ? `Antigravity：${agy.error}${agy.value ? "（保留上次成功结果）" : ""}` : "");
+  renderCodex(codex);
+  renderAntigravity(agy);
+  const codexStatus = $("codex-query-status");
+  codexStatus.replaceChildren();
+  statusDetails(codexStatus, codex);
+  const agyStatus = $("agy-query-status");
+  agyStatus.replaceChildren();
+  statusDetails(agyStatus, agy, [agy.value?.summaryError]);
   const usage = latest.usage;
   $("overview-tokens").textContent = Number(usage.totals.totalTokens).toLocaleString();
+  $("overview-tokens-detail").textContent = !usage.records ? "暂无本插件记录的用量"
+    : `${usage.records.toLocaleString()} 条账本记录${usage.stale ? " · 汇总已过期" : ""}${usage.invalidRecords ? ` · ${usage.invalidRecords.toLocaleString()} 条损坏记录已跳过` : ""}`;
   const pricing = usage.pricing;
   $("overview-cost").textContent = pricing.pricedRecords ? money(pricing.estimatedCostUsd) : "—";
-  $("overview-cost-detail").textContent = pricing.unpricedRecords
-    ? `部分估算 · ${pricing.unpricedRecords.toLocaleString()} 条未计价（${pricing.unpricedTokens.toLocaleString()} tokens）`
-    : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录";
+  $("overview-cost-detail").textContent = `${pricing.unpricedRecords
+    ? `${pricing.pricedRecords ? "部分估算" : "暂无可估算费用"} · ${pricing.unpricedRecords.toLocaleString()} 条未计价（${pricing.unpricedTokens.toLocaleString()} tokens）`
+    : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录"}${usage.stale ? " · 账本汇总已过期" : ""}`;
   const context = latest.context;
   $("overview-context").textContent = typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : "—";
   $("overview-context-detail").textContent = context ? `${context.tokens === null ? "未知" : Number(context.tokens).toLocaleString()} / ${Number(context.contextWindow).toLocaleString()} tokens` : "当前模型未提供上下文窗口";
@@ -278,6 +359,10 @@ function render() {
   }
   renderPriceTable(pricing);
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
+  if (!busy) {
+    $("show-oai").checked = latest.config.showOaiInStatusbar;
+    $("show-agy").checked = latest.config.showAgyInStatusbar;
+  }
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }
 async function load() {
@@ -289,10 +374,18 @@ async function load() {
   render();
   $("feedback").textContent = "";
 }
+function syncStatusbarControls() {
+  if (!latest) return;
+  $("show-oai").checked = latest.config.showOaiInStatusbar;
+  $("show-agy").checked = latest.config.showAgyInStatusbar;
+}
+function setBusy(value) {
+  busy = value;
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy"]) $(id).disabled = value;
+}
 async function action(path, body) {
   if (busy || !control) return;
-  busy = true;
-  $("refresh").disabled = true;
+  setBusy(true);
   $("feedback").textContent = "处理中…";
   try {
     const response = await fetch(path, {
@@ -303,10 +396,10 @@ async function action(path, body) {
     await load();
     $("feedback").textContent = "已更新";
   } catch (error) {
+    syncStatusbarControls();
     $("feedback").textContent = error.message || "操作失败";
   } finally {
-    $("refresh").disabled = false;
-    busy = false;
+    setBusy(false);
   }
 }
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
@@ -317,6 +410,12 @@ $("interval-form").addEventListener("submit", (event) => {
   const seconds = Number($("interval").value);
   if (!Number.isInteger(seconds) || seconds < 60 || seconds > 3600) return;
   void action("/api/interval", { seconds });
+});
+$("show-oai").addEventListener("change", (event) => {
+  void action("/api/statusbar", { showOaiInStatusbar: event.currentTarget.checked });
+});
+$("show-agy").addEventListener("change", (event) => {
+  void action("/api/statusbar", { showAgyInStatusbar: event.currentTarget.checked });
 });
 void load().catch((error) => { $("feedback").textContent = error.message; });
 setInterval(() => { void load().catch((error) => { $("feedback").textContent = error.message; }); }, 5000);

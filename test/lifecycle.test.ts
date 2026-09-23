@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { saveConfig } from "../src/config.js";
 import quotaMonitor from "../src/index.js";
 
 vi.mock("../src/config.js", async (importOriginal) => {
@@ -88,7 +89,7 @@ it("queries the local agy provider natively without treating its sentinel as OAu
   expect(getApiKeyForProvider).not.toHaveBeenCalled();
 });
 
-it("opens the console in RPC mode, hides only its own footer status, and releases the port", async () => {
+it("keeps selected RPC status visible in the console and applies settings without disabling quotas", async () => {
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
   let command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   const statuses: Array<{ key: string; text?: string }> = [];
@@ -102,7 +103,7 @@ it("opens the console in RPC mode, hides only its own footer status, and release
     ui: { setStatus: (key: string, text?: string) => statuses.push({ key, text }), notify: (message: string) => notices.push(message) },
     sessionManager: { getBranch: () => [] },
     getContextUsage: () => ({ tokens: 70_720, contextWindow: 272_000, percent: 26 }),
-    modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
+    modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => ({ auth: { apiKey: "test" } }), getApiKeyForProvider: async () => JSON.stringify({ token: "test", projectId: "test" }) },
   } as unknown as ExtensionContext;
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
   cleanup.push(() => { void fire("session_shutdown"); });
@@ -110,7 +111,9 @@ it("opens the console in RPC mode, hides only its own footer status, and release
   await command?.("console", ctx);
   const url = notices.at(-1)?.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
   expect(url).toBeDefined();
-  expect(statuses.at(-1)).toEqual({ key: "pi-quota-monitor", text: undefined });
+  expect(statuses.at(-1)?.key).toBe("pi-quota-monitor");
+  expect(statuses.at(-1)?.text).toContain("OAI ");
+  expect(statuses.at(-1)?.text).toContain("AGY ");
   const response = await fetch(`${url}/api/state`);
   expect(response.status).toBe(200);
   const payload = await response.json() as Record<string, unknown>;
@@ -118,6 +121,34 @@ it("opens the console in RPC mode, hides only its own footer status, and release
   expect(payload.context).toEqual({ tokens: 70720, contextWindow: 272000, percent: 26 });
   expect(payload).not.toHaveProperty("session");
   expect(payload).not.toHaveProperty("daily");
+  const control = payload.control as string;
+  const headers = { Origin: url!, "X-Quota-Control": control, "Content-Type": "application/json" };
+  const { queryCodexQuota } = await import("../src/providers/codex.js");
+  const callsBeforeRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
+  const saved = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
+    body: JSON.stringify({ showOaiInStatusbar: false, showAgyInStatusbar: false }) });
+  expect(saved.status).toBe(200);
+  expect(statuses.at(-1)).toEqual({ key: "pi-quota-monitor", text: "↑0 ↓0" });
+  const refreshedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
+  expect(refreshedState.config).toMatchObject({ showOaiInStatusbar: false, showAgyInStatusbar: false });
+  const refreshResponse = await fetch(`${url}/api/refresh`, { method: "POST", headers });
+  expect(refreshResponse.status).toBe(200);
+  expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
+  await command?.("", ctx);
+  expect(notices.at(-1)).toContain("Codex");
+  expect(statuses.at(-1)?.text).toBe("↑0 ↓0");
+
+  const tuiContext = { ...ctx, mode: "tui" } as unknown as ExtensionContext;
+  await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, tuiContext);
+  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | AGY 84%/67%");
+
+  vi.mocked(saveConfig).mockRejectedValueOnce(new Error("disk full"));
+  const failedSave = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
+    body: JSON.stringify({ showOaiInStatusbar: true }) });
+  expect(failedSave.status).toBe(500);
+  const failedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
+  expect(failedState.config).toMatchObject({ showOaiInStatusbar: false, showAgyInStatusbar: false });
+  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | AGY 84%/67%");
   await fire("session_shutdown");
   cleanup.pop();
   await vi.waitFor(async () => { await expect(fetch(`${url}/api/state`)).rejects.toThrow(); });

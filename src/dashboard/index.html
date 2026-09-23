@@ -11,34 +11,68 @@
 <body>
   <main class="shell">
     <header class="hero">
-      <div><p class="eyebrow">PI QUOTA MONITOR / CONSOLE</p><h1>概览</h1><p class="subtitle">查看剩余额度与本插件记录的全部模型 Token 用量。</p></div>
-      <div class="controls"><button id="refresh" type="button">刷新额度</button><span id="feedback" role="status" aria-live="polite"></span></div>
+      <div><p class="eyebrow">PI QUOTA MONITOR / CONSOLE</p><h1>Pi Quota Console</h1><p class="subtitle">概览 → 剩余额度 → 用量</p></div>
+      <span id="feedback" role="status" aria-live="polite"></span>
     </header>
 
-    <section class="intro panel" aria-labelledby="intro-title">
-      <h2 id="intro-title">本地用量账本</h2>
-      <p>统计本插件启用后记录的所有日期，不包含启用前的历史。额度来自 Provider 缓存，手动刷新可重新查询。</p>
-      <p class="hint">费用按本插件账本的 Token 和公开 API 标价估算，并非 Codex/Antigravity 订阅实际账单或账户预算上限；上下文百分比是当前模型窗口占用。仅监听 127.0.0.1 · 不展示凭据 · Reasoning 属于 Output，不重复计入 Total tokens</p>
-    </section>
-
-    <section class="overview" aria-label="Token 概览">
-      <article class="metric-card"><span>全部账本 Tokens</span><strong id="overview-tokens">—</strong></article>
-      <article class="metric-card"><span>全部账本估算费用（USD）</span><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
-      <article class="metric-card"><span>当前模型上下文</span><strong id="overview-context">—</strong><small id="overview-context-detail">等待数据</small></article>
-    </section>
-
-    <section class="section" aria-labelledby="quota-title">
-      <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>5 小时与每周窗口；未提供的数据以 — 表示。</p></div></div>
-      <div class="summary">
-        <article class="card"><span class="label">Codex · 5 小时</span><strong id="codex-five">—</strong><span id="codex-five-reset" class="subtle">等待数据</span></article>
-        <article class="card"><span class="label">Codex · 每周</span><strong id="codex-week">—</strong><span id="codex-week-reset" class="subtle">等待数据</span></article>
-        <article class="card"><span class="label">Antigravity · Gemini</span><strong id="agy-gemini">—</strong><span id="agy-gemini-reset" class="subtle">等待数据</span></article>
-        <article class="card"><span class="label">Antigravity · Claude/GPT</span><strong id="agy-shared">—</strong><span id="agy-shared-reset" class="subtle">等待数据</span></article>
+    <section class="section overview-section" aria-labelledby="overview-title">
+      <div class="section-heading"><div><h2 id="overview-title">概览</h2><p>快速查看全账本用量、费用估算与当前模型上下文。</p></div></div>
+      <div class="ledger-summary panel">
+        <span><strong>本地用量账本</strong> · 仅统计本插件启用后记录的用量。</span>
+        <details class="about-details">
+          <summary aria-label="关于本地用量数据"><span class="help-mark" aria-hidden="true">?</span><span>关于数据</span></summary>
+          <div class="about-copy">
+            <p>账本仅覆盖插件启用后记录的数据，不覆盖启用前的历史。Reasoning 是 Output 的子集，不会重复计入 Total tokens。</p>
+            <p>费用按账本 Token 和公开 API 标价估算，不是 Codex / Antigravity 订阅实付或账户预算上限；未知价格、缓存存储时长、非文本用量、工具调用、订阅折扣和历史价格变化可能导致估算不完整。</p>
+            <p>控制台只绑定本机 127.0.0.1，不展示凭据或原始账本。页面只读取本地缓存，不因页面轮询而额外查询 Provider。</p>
+          </div>
+        </details>
+      </div>
+      <div class="overview">
+        <article class="metric-card"><span>全部账本 Tokens</span><strong id="overview-tokens">—</strong><small id="overview-tokens-detail">正在读取本地账本…</small></article>
+        <article class="metric-card"><span>全部账本估算费用（USD）</span><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
+        <article class="metric-card"><span>当前模型上下文占用</span><strong id="overview-context">—</strong><small id="overview-context-detail">等待数据</small></article>
       </div>
     </section>
 
-    <section class="section" aria-labelledby="usage-title">
-      <div class="section-heading"><div><h2 id="usage-title">Token 用量</h2><p>按 (Provider, Model) 汇总，覆盖账本中所有已记录日期。</p></div></div>
+    <section class="section quota-section" aria-labelledby="quota-title">
+      <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>按 Provider 展示实际返回的额度组与窗口；缺少窗口数据时明确显示未知。</p></div><button id="refresh" type="button">立即刷新额度</button></div>
+      <div class="provider-grid">
+        <article class="provider-card panel" aria-labelledby="codex-title">
+          <header class="provider-heading"><div><h3 id="codex-title">OpenAI Codex</h3><p id="codex-plan" class="hint"></p></div></header>
+          <div id="codex-windows" class="quota-windows"></div>
+          <p id="codex-success" class="provider-meta">等待查询</p>
+          <div id="codex-error" aria-live="polite"></div>
+        </article>
+        <article class="provider-card panel" aria-labelledby="agy-title">
+          <header class="provider-heading"><div><h3 id="agy-title">Antigravity</h3><p id="agy-plan" class="hint"></p></div></header>
+          <div id="agy-windows" class="quota-groups"><p class="hint">正在读取额度…</p></div>
+          <p id="agy-success" class="provider-meta">等待查询</p>
+          <div id="agy-error" aria-live="polite"></div>
+        </article>
+      </div>
+
+      <details class="settings-panel panel">
+        <summary>状态与设置</summary>
+        <div class="settings-content">
+          <p class="hint">Provider 状态为只读信息。后台间隔控制额度查询频率；页面每 5 秒读取本地缓存和账本增量，不会额外调用 Provider API。</p>
+          <div class="provider-status-grid" aria-label="Provider 查询状态">
+            <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div></article>
+            <article class="provider-status"><h3>Antigravity</h3><div id="agy-query-status"></div></article>
+          </div>
+          <form id="interval-form"><label for="interval">后台刷新间隔（秒，60–3600）</label><div class="form-row"><input id="interval" type="number" min="60" max="3600" step="1" required><button id="interval-submit" type="submit">保存间隔</button></div></form>
+          <p class="hint">状态栏开关更改后立即保存到插件配置；保存失败会恢复原设置并提示。</p>
+          <fieldset class="statusbar-settings"><legend>pi-web 扩展状态栏显示</legend>
+            <label class="toggle"><input id="show-oai" type="checkbox"><span>在 pi-web 扩展状态栏显示 OAI</span></label>
+            <label class="toggle"><input id="show-agy" type="checkbox"><span>在 pi-web 扩展状态栏显示 AGY</span></label>
+          </fieldset>
+          <p class="hint">开关只影响 pi-web 状态栏中的对应 Provider 片段，不会停止额度查询、隐藏本页额度块或改变 /quota 输出。TUI 状态栏保持原有行为。</p>
+        </div>
+      </details>
+    </section>
+
+    <section class="section usage-section" aria-labelledby="usage-title">
+      <div class="section-heading"><div><h2 id="usage-title">用量</h2><p>按 (Provider, Model) 汇总，覆盖账本中所有已记录日期。</p></div></div>
       <div class="panel usage-panel">
         <div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div>
         <div class="distribution">
@@ -54,10 +88,6 @@
       </div>
     </section>
 
-    <section class="lower-grid" aria-label="Provider 与设置">
-      <article class="panel"><h2>Provider 状态</h2><div id="providers"></div></article>
-      <section class="panel settings" aria-label="刷新设置"><div><h2>自动刷新间隔</h2><p class="hint">Provider 后台查询，范围 60–3600 秒。页面每 5 秒读取本地缓存，不额外请求 Provider。</p></div><form id="interval-form"><label for="interval">秒</label><input id="interval" type="number" min="60" max="3600" step="1" required><button type="submit">保存</button></form></section>
-    </section>
     <footer><span id="last-check">连接本地 Pi 会话中…</span><span>Pi Quota Monitor</span></footer>
   </main>
 </body>

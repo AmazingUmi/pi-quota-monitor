@@ -8,6 +8,8 @@ export const DEFAULT_CONFIG: MonitorConfig = {
   staleAfterSeconds: 60,
   requestTimeoutSeconds: 10,
   showReset: true,
+  showOaiInStatusbar: true,
+  showAgyInStatusbar: true,
 };
 
 export function configDirectory(): string {
@@ -31,6 +33,9 @@ export function normalizeConfig(value: unknown): MonitorConfig {
     requestTimeoutSeconds: typeof timeout === "number" && Number.isInteger(timeout) && timeout >= 3 && timeout <= 30
       ? timeout : DEFAULT_CONFIG.requestTimeoutSeconds,
     showReset: typeof record.showReset === "boolean" ? record.showReset : DEFAULT_CONFIG.showReset,
+    // Older config files predate these switches; keep the historical statusbar behavior.
+    showOaiInStatusbar: typeof record.showOaiInStatusbar === "boolean" ? record.showOaiInStatusbar : DEFAULT_CONFIG.showOaiInStatusbar,
+    showAgyInStatusbar: typeof record.showAgyInStatusbar === "boolean" ? record.showAgyInStatusbar : DEFAULT_CONFIG.showAgyInStatusbar,
   };
 }
 

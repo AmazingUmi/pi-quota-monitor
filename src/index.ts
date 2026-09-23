@@ -64,9 +64,10 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!active || !ctx.hasUI) return;
     // RPC setStatus is forwarded by pi-web; TUI uses its native status footer.
     try {
-      ctx.ui.setStatus(STATUS_KEY, dashboard && ctx.mode === "rpc"
-        ? undefined
-        : formatStatus(codex, antigravity, sessionTotals, config.showReset));
+      const visibility = ctx.mode === "rpc"
+        ? { showOai: config.showOaiInStatusbar, showAgy: config.showAgyInStatusbar }
+        : undefined; // TUI statusbars retain the historical OAI + AGY display.
+      ctx.ui.setStatus(STATUS_KEY, formatStatus(codex, antigravity, sessionTotals, config.showReset, Date.now(), visibility));
     } catch {
       // A closing/replaced UI must not turn a completed quota query into an unhandled rejection.
     }
@@ -135,6 +136,15 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!live(epoch)) throw new Error("Session is no longer active.");
     config = next;
     scheduler?.updateInterval(seconds * 1000);
+    if (currentContext) render(currentContext);
+  }
+
+  async function setStatusbarSettings(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>, epoch: number): Promise<void> {
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    const next = { ...config, ...settings };
+    await saveConfig(next);
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    config = next;
     if (currentContext) render(currentContext);
   }
 
@@ -245,12 +255,13 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
               await updateDailyDate(epoch);
             },
             setInterval: (seconds) => setIntervalSeconds(seconds, epoch),
+            setStatusbar: (settings) => setStatusbarSettings(settings, epoch),
           });
         }
         try {
           const url = await dashboard.start();
           if (!live(epoch)) return;
-          render(ctx); // Remove our RPC footer entry; other extensions keep theirs.
+          render(ctx); // Keep this extension's RPC statusbar entry visible according to its settings.
           const message = `额度控制台：${url}（仅本机访问；本会话结束后关闭）`;
           if (ctx.hasUI) ctx.ui.notify(message, "info");
           else console.log(message);

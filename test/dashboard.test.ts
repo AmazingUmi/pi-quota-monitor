@@ -15,14 +15,16 @@ const state: DashboardState = {
   pricing: { asOf: "2026-09-23", estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 1, unpricedTokens: 240 },
   records: 1, invalidRecords: 0, updatedAt: Date.now(), stale: false },
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
-  config: { refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true },
+  config: { refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
+    showOaiInStatusbar: true, showAgyInStatusbar: true },
   updatedAt: Date.now(),
 };
 
 it("serves a loopback-only, credential-free dashboard and closes on shutdown", async () => {
   const refresh = vi.fn(async () => {});
   const setInterval = vi.fn(async (seconds: number) => { state.config.refreshIntervalSeconds = seconds; });
-  const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval });
+  const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showAgyInStatusbar">>) => { Object.assign(state.config, settings); });
+  const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval, setStatusbar });
   running.push(dashboard);
   const origin = await dashboard.start();
   expect(await dashboard.start()).toBe(origin);
@@ -35,15 +37,28 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("概览");
   expect(html).toContain("Token 消耗趋势");
   expect(html).toContain("chart-model");
+  expect([...html.matchAll(/<section class="section /g)]).toHaveLength(3);
+  expect([...html.matchAll(/<h2 id="[^"]+">([^<]+)/g)].map((match) => match[1]))
+    .toEqual(["概览", "剩余额度", "用量"]);
+  expect(html).toContain("关于数据");
+  expect(html).toContain("状态与设置");
+  expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
+  expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
   expect(html).not.toContain("当前会话 Token");
   expect(html).not.toContain("Cost");
   const css = await (await fetch(`${origin}/style.css`)).text();
   expect(css).toContain("prefers-color-scheme: dark");
   expect(css).toContain("#245bce");
   expect(css).toContain(".chart-line");
+  expect(css).toContain(".overview-section { --section-accent:");
+  expect(css).toContain(".usage-section { --section-accent:");
+  expect(css).toContain(".quota-section { --section-accent:");
   const js = await fetch(`${origin}/client.js`);
   expect(js.status).toBe(200);
-  expect(await js.text()).toContain("/api/refresh");
+  const client = await js.text();
+  expect(client).toContain("/api/refresh");
+  expect(client).toContain("/api/statusbar");
+  expect(client).toContain("quota-group");
   Object.assign(state.usage, { ledgerPath: "/secret/usage.jsonl", credential: "secret" });
   Object.assign(state.usage.models[0], { ledgerPath: "/secret/usage.jsonl" });
   state.usage.timeline.hours.push({ bucket: String(Date.now()), provider: "openai-codex", model: "gpt", totalTokens: 240 });
@@ -63,7 +78,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(JSON.stringify(payload)).not.toContain("/usage-");
   expect(JSON.stringify(payload)).not.toContain("/secret/");
   expect(JSON.stringify(payload)).not.toContain("credential");
-  expect(Object.keys(payload.config)).toEqual(["refreshIntervalSeconds"]);
+  expect(Object.keys(payload.config)).toEqual(["refreshIntervalSeconds", "showOaiInStatusbar", "showAgyInStatusbar"]);
+  expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showAgyInStatusbar: true });
   expect(Object.keys(payload.usage)).toEqual(["totals", "models", "pricing", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
   const blocked = await fetch(`${origin}/api/refresh`, { method: "POST", headers: { Origin: "https://evil.example", "X-Quota-Control": payload.control } });
@@ -84,6 +100,12 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const saved = await fetch(`${origin}/api/interval`, { method: "POST", headers, body: JSON.stringify({ seconds: 240 }) });
   expect(saved.status).toBe(200);
   expect(setInterval).toHaveBeenCalledWith(240);
+  const invalidStatusbar = await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showOaiInStatusbar: "false" }) });
+  expect(invalidStatusbar.status).toBe(400);
+  expect(setStatusbar).not.toHaveBeenCalled();
+  const savedStatusbar = await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showOaiInStatusbar: false }) });
+  expect(savedStatusbar.status).toBe(200);
+  expect(setStatusbar).toHaveBeenCalledWith({ showOaiInStatusbar: false });
   const refreshed = await fetch(`${origin}/api/refresh`, { method: "POST", headers });
   expect(refreshed.status).toBe(200);
   expect(refresh).toHaveBeenCalledOnce();
