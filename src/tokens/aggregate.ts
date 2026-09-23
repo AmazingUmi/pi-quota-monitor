@@ -75,7 +75,7 @@ export class UsageAggregator {
   private inFlight?: Promise<void>;
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly directory = configDirectory()) {}
+  constructor(private readonly directory = configDirectory(), private readonly accountId?: string | null) {}
 
   state(): UsageSummary { return this.summary; }
 
@@ -216,6 +216,14 @@ export class UsageAggregator {
         try {
           const value: unknown = JSON.parse(line.toString("utf8"));
           if (!validRecord(value, day)) throw new Error("Invalid record");
+          // Legacy Codex entries without an account ID are intentionally unassigned.
+          if (this.accountId !== undefined && value.provider === "openai-codex"
+            && (this.accountId === null ? value.accountId !== undefined : value.accountId !== this.accountId)) {
+            state.pending = Buffer.alloc(0);
+            state.discarding = false;
+            start = i + 1;
+            continue;
+          }
           const key = keyFor(value.provider, value.model);
           const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
           const cost = estimateRecordCost(value);

@@ -21,14 +21,16 @@ export function parseCodexQuota(payload: unknown, capturedAt = Date.now()): Code
   if (!isRecord(payload) || !isRecord(payload.rate_limit)) {
     throw new Error("Codex rate-limit data unavailable.");
   }
-  const primary = parseWindow(payload.rate_limit.primary_window, "5h");
-  const secondary = parseWindow(payload.rate_limit.secondary_window, "weekly");
+  const primary = parseWindow(payload.rate_limit.primary_window, "primary");
+  const secondary = parseWindow(payload.rate_limit.secondary_window, "secondary");
   if (!primary && !secondary) throw new Error("Codex returned no quota windows.");
+  // Pro can report a weekly primary with no secondary. Positions are not window types.
   const windows = [primary, secondary].filter((window): window is QuotaWindow => window !== undefined);
-  const fiveHour = windows.find((window) => window.windowMinutes !== undefined && window.windowMinutes <= 360)
-    ?? primary;
-  const weekly = windows.find((window) => window !== fiveHour && window.windowMinutes !== undefined && window.windowMinutes >= 7 * 24 * 60)
-    ?? windows.find((window) => window !== fiveHour);
+  const isPro = cleanText(payload.plan_type)?.toLowerCase() === "pro";
+  const fiveHour = windows.find((window) => window.windowMinutes !== undefined && window.windowMinutes >= 4 * 60 && window.windowMinutes <= 6 * 60);
+  const weekly = windows.find((window) => window.windowMinutes !== undefined && window.windowMinutes >= 6 * 24 * 60 && window.windowMinutes <= 8 * 24 * 60)
+    // Pro may report only one value without a duration; do not make this assumption for other plans.
+    ?? (isPro && windows.length === 1 && windows[0].windowMinutes === undefined ? windows[0] : undefined);
   return {
     capturedAt,
     ...(cleanText(payload.plan_type) ? { plan: cleanText(payload.plan_type) } : {}),

@@ -1,4 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "./accounts.js";
+import { backupHistory, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import { QuotaDashboard } from "./dashboard.js";
 import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
@@ -21,6 +23,28 @@ function safeFailure(error: unknown): string {
   if (error instanceof Error && error.message === "agy binary unavailable.") return "agy executable unavailable";
   if (error instanceof Error && error.message === "agy usage timed out.") return "agy native query timed out";
   return "Query failed; retry later";
+}
+
+function safeAccountFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const allowed = [
+    "Only Pi's native Codex OAuth profiles with accountId are supported.",
+    "Invalid profile name (use letters, digits, dots, underscores or hyphens).",
+    "Profile name belongs to another account.",
+    "Current profile differs from Pi login; save it before switching.",
+    "Save the current Pi account before switching.",
+    "Invalid Pi auth.json.",
+    "Profile already exists; import will not overwrite it.",
+    "Invalid backup.", "Unsupported backup format.", "Invalid backup profile.", "Invalid backup ledger.",
+    "Profile name conflict; import aborted.", "An account ID is required.",
+    "Ledger contains an incomplete or damaged line; reset aborted without changing usage.",
+    "Please clear queued messages before switching.",
+    "Session change was cancelled; account switch rolled back.",
+    "Unknown account profile.", "Reset requires an interactive confirmation.",
+    "Restore requires an interactive confirmation.", "Delete requires an interactive confirmation.",
+    "Switch to another account before deleting the active profile.",
+  ];
+  return allowed.includes(message) ? message : "账号操作失败；请检查本地文件、权限及账号状态。";
 }
 
 function contextMetrics(ctx: ExtensionContext): { tokens: number | null; contextWindow: number; percent: number | null } | null {
@@ -73,13 +97,16 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let config: MonitorConfig = { ...DEFAULT_CONFIG };
   let scheduler: RefreshScheduler | undefined;
   let dashboard: QuotaDashboard | undefined;
-  let usageAggregator: UsageAggregator | undefined;
+  let accountAggregators: UsageAggregator[] = [];
+  let accountNotice: { message: string; level: "info" | "warning" | "error"; at: number } | undefined;
   let abortController: AbortController | undefined;
   let currentContext: ExtensionContext | undefined;
   let sessionTotals = emptyTotals();
   let dailyTotals = emptyTotals();
   let dailyDate = "";
   let ledgerQueue: Promise<void> = Promise.resolve();
+  let requestAccountId: string | undefined;
+  let codexAccountId: string | undefined;
   const codex: ProviderCache<CodexQuota> = {};
   const antigravity: ProviderCache<AntigravityQuota> = {};
   const inFlight: Partial<Record<ProviderId, Promise<void>>> = {};
@@ -103,6 +130,23 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
 
   function refresh(provider: ProviderId, ctx: ExtensionContext, force = false): Promise<void> {
     if (!active) return Promise.resolve();
+    const account = provider === "openai-codex" ? activeAccountId() : undefined;
+    if (provider === "openai-codex" && codexAccountId !== account) {
+      codexAccountId = account;
+      dailyDate = "";
+      void updateDailyDate(generation);
+      if (dashboard) {
+        void dashboard.stop().catch(() => {});
+        dashboard = undefined;
+        accountAggregators.forEach((view) => view.stop());
+        accountAggregators = [];
+        if (ctx.hasUI) ctx.ui.notify("Codex 账号已改变，请重新运行 /quota-console。", "warning");
+      }
+      codex.value = undefined;
+      codex.error = undefined;
+      codex.lastAttemptAt = undefined;
+      render(ctx);
+    }
     if (inFlight[provider]) return inFlight[provider];
     const cache = provider === "openai-codex" ? codex : antigravity;
     if (!force && cache.lastAttemptAt !== undefined && Date.now() - cache.lastAttemptAt < config.staleAfterSeconds * 1000) return Promise.resolve();
@@ -122,7 +166,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!live(epoch)) return;
           if (!resolved) throw new Error("Codex credentials unavailable");
           const result = await queryCodexQuota(resolved.auth, signal, timeoutMs);
-          if (!live(epoch)) return;
+          if (!live(epoch) || activeAccountId() !== account) return;
           codex.value = result;
           codex.error = undefined;
         } else {
@@ -142,14 +186,21 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           antigravity.error = undefined;
         }
       } catch (error) {
-        if (!live(epoch)) return;
+        if (!live(epoch) || (provider === "openai-codex" && activeAccountId() !== account)) return;
         cache.error = safeFailure(error);
       } finally {
         if (live(epoch)) render(ctx);
       }
     })();
     inFlight[provider] = promise;
-    void promise.finally(() => { if (inFlight[provider] === promise) delete inFlight[provider]; }).catch(() => {});
+    void promise.finally(() => {
+      if (inFlight[provider] !== promise) return;
+      delete inFlight[provider];
+      // An account changed during an older query: never reuse its result or delay the new query until the next timer.
+      if (provider === "openai-codex" && live(epoch) && activeAccountId() !== account && currentContext) {
+        void refresh(provider, currentContext, true);
+      }
+    }).catch(() => {});
     return promise;
   }
 
@@ -182,7 +233,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     const date = localDate(Date.now());
     if (date === dailyDate) return;
     try {
-      const totals = await readDailyUsage(date);
+      const totals = await readDailyUsage(date, activeAccountId() ?? null);
       if (live(epoch)) { dailyDate = date; dailyTotals = totals; }
     } catch { /* Keep the last valid daily result. */ }
   }
@@ -192,10 +243,13 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     active = true;
     abortController = new AbortController();
     currentContext = ctx;
+    accountNotice = undefined;
     config = await loadConfig();
     if (!live(epoch)) return;
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
+    codexAccountId = activeAccountId();
+    requestAccountId = undefined;
     codex.value = undefined;
     codex.error = undefined;
     codex.lastAttemptAt = undefined;
@@ -206,7 +260,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     await ledgerQueue;
     if (!live(epoch)) return;
     dailyDate = localDate(Date.now());
-    try { dailyTotals = await readDailyUsage(dailyDate); }
+    try { dailyTotals = await readDailyUsage(dailyDate, activeAccountId() ?? null); }
     catch { dailyTotals = emptyTotals(); }
     if (!live(epoch)) return;
     render(ctx);
@@ -235,9 +289,15 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (provider === "openai-codex" || provider === "antigravity") void refresh(provider, ctx, true);
   });
 
+  pi.on("before_provider_headers", (_event, ctx) => {
+    if (active && ctx.model?.provider === "openai-codex") requestAccountId = activeAccountId();
+  });
+
   pi.on("message_end", (event, ctx) => {
     if (!active || event.message.role !== "assistant") return;
     const record = tokenRecord(event.message);
+    if (record?.provider === "openai-codex" && requestAccountId) record.accountId = requestAccountId;
+    requestAccountId = undefined;
     if (record) {
       sessionTotals = accumulate(sessionTotals, record);
       ledgerQueue = ledgerQueue.then(async () => {
@@ -245,9 +305,11 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
         const date = localDate(Date.now());
         if (date !== dailyDate) {
           dailyDate = date;
-          dailyTotals = await readDailyUsage(date);
+          dailyTotals = await readDailyUsage(date, activeAccountId() ?? null);
         } else {
-          dailyTotals = accumulate(dailyTotals, record);
+          if (record.provider !== "openai-codex" || record.accountId === (activeAccountId() ?? null)) {
+            dailyTotals = accumulate(dailyTotals, record);
+          }
         }
       }).catch(() => {
         // Failed writes must not corrupt the on-screen session count.
@@ -267,17 +329,65 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!active) return;
     const epoch = generation;
     const command = args.trim();
+    // Native /login and external auth changes must invalidate the previous account's quota before display.
+    void refresh("openai-codex", ctx);
     if (command === "console") {
       if (!dashboard) {
-        const aggregator = new UsageAggregator();
-        await aggregator.start();
-        if (!live(epoch)) { aggregator.stop(); return; }
-        usageAggregator = aggregator;
+        const views = new Map<string, UsageAggregator>();
+        let syncingViews: Promise<{ accounts: Array<{ id: string; name: string }>; currentId?: string; currentProfile?: string; profiles: Array<{ name: string; accountId: string }> }> | undefined;
+        const ensureViews = () => {
+          if (syncingViews) return syncingViews;
+          syncingViews = (async () => {
+            if (!live(epoch)) throw new Error("Session is no longer active.");
+            const listed = await listAccounts();
+            const currentId = activeAccountId();
+            const accounts = [{ id: "legacy", name: "未归属历史" }];
+            for (const item of listed.profiles) {
+              const id = `account:${item.accountId}`;
+              if (!accounts.some((account) => account.id === id)) accounts.push({ id, name: item.name });
+            }
+            if (currentId && !accounts.some((item) => item.id === `account:${currentId}`)) accounts.push({ id: `account:${currentId}`, name: "当前账号" });
+            for (const [id, view] of views) {
+              if (accounts.some((item) => item.id === id)) continue;
+              view.stop();
+              views.delete(id);
+              accountAggregators = accountAggregators.filter((item) => item !== view);
+            }
+            for (const item of accounts) {
+              if (views.has(item.id)) continue;
+              const view = new UsageAggregator(undefined, item.id === "legacy" ? null : item.id.slice("account:".length));
+              await view.start();
+              if (!live(epoch)) { view.stop(); throw new Error("Session is no longer active."); }
+              views.set(item.id, view);
+              accountAggregators.push(view);
+            }
+            return { accounts, currentId, currentProfile: listed.current, profiles: listed.profiles };
+          })().finally(() => { syncingViews = undefined; });
+          return syncingViews;
+        };
+        try { await ensureViews(); }
+        catch { accountAggregators.forEach((view) => view.stop()); accountAggregators = []; throw new Error("Unable to load account usage."); }
         dashboard = new QuotaDashboard({
-          state: () => {
-            const usage = aggregator.state();
-            return { codex, antigravity, usage, context: currentContext ? contextMetrics(currentContext) : null,
-              quotaEstimates: quotaAmountEstimates(aggregator, codex, antigravity), config, updatedAt: Date.now() };
+          state: async (requested) => {
+            const { accounts, currentId, currentProfile, profiles } = await ensureViews();
+            const defaultId = currentId ? `account:${currentId}` : "legacy";
+            const selected = requested && views.has(requested) ? requested : defaultId;
+            const view = views.get(selected)!;
+            const showingCurrent = currentId !== undefined && selected === `account:${currentId}`;
+            const visibleCodex = showingCurrent && codexAccountId === currentId ? codex : {};
+            return { accounts, currentProfile, profiles, backups: await listBackups(), accountNotice, selectedAccountId: selected,
+              currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
+              antigravity, usage: view.state(), context: currentContext ? contextMetrics(currentContext) : null,
+              quotaEstimates: quotaAmountEstimates(view, visibleCodex, antigravity), config, updatedAt: Date.now() };
+          },
+          accountCommand: async (command, args) => {
+            if (!live(epoch)) throw new Error("Session is no longer active.");
+            const name = `quota-account-${command}`;
+            if (!accountCommands.some(([registered]) => registered === name)) throw new Error("Unknown account command.");
+            pi.sendUserMessage(`/${name}${args ? ` ${args}` : ""}`, {
+              expandPromptTemplates: true,
+              ...(currentContext?.isIdle?.() === false ? { deliverAs: "followUp" as const } : {}),
+            });
           },
           refresh: async () => {
             if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
@@ -298,8 +408,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       } catch {
         if (!live(epoch)) return;
         dashboard = undefined;
-        usageAggregator?.stop();
-        usageAggregator = undefined;
+        accountAggregators.forEach((view) => view.stop());
+        accountAggregators = [];
         render(ctx);
         ctx.ui.notify("无法启动本地额度控制台。", "error");
       }
@@ -327,6 +437,113 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     else console.log(details);
   };
 
+  const handleAccountCommand = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
+      const raw = args.trim();
+      const [action, first, second, surplus] = raw.split(/\s+/);
+      const label = action === "restore" ? raw.slice(action.length).trim() : first;
+      const extra = action === "restore" ? undefined : action === "import" && first ? raw.slice(action.length).trimStart().slice(first.length).trimStart() : second;
+      if (surplus && action !== "import" && action !== "restore") { ctx.ui.notify("参数过多。", "warning"); return; }
+      const notify = (text: string, level: "info" | "warning" | "error" = "info") => {
+        accountNotice = { message: text, level, at: Math.max(Date.now(), (accountNotice?.at ?? 0) + 1) };
+        if (ctx.hasUI) ctx.ui.notify(text, level);
+        else console.error(text);
+      };
+      try {
+        if (!action || action === "list" || action === "current") {
+          const { current, profiles } = await listAccounts();
+          notify(`当前：${current ?? `未保存 (${activeAccountId() ?? "未知"})`}\n${profiles.map((p) => `${p.name === current ? "* " : "  "}${p.name} (${p.accountId})`).join("\n") || "无已保存账号"}`);
+        } else if (action === "save" && label && !extra) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          await backupHistory();
+          await saveAccount(label);
+          if (active) void refresh("openai-codex", ctx, true);
+          notify(`已保存当前 Pi OAuth 账号：${label}`);
+        } else if (action === "import" && label && extra) {
+          await ctx.waitForIdle();
+          await backupHistory();
+          await importAccount(label, extra);
+          notify(`已导入账号：${label}（未切换）`);
+        } else if (action === "delete" && label && !extra) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          if (!ctx.hasUI) throw new Error("Delete requires an interactive confirmation.");
+          if (!await ctx.ui.confirm("删除账号 profile", `备份后删除 ${label} 的保存凭据？不会删除账本，也不会退出 Pi 当前登录。`)) return;
+          await backupHistory();
+          await deleteAccount(label);
+          notify(`已删除 profile：${label}（历史用量仍保留）`);
+        } else if (action === "use" && label && !extra) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          if (ctx.hasPendingMessages()) throw new Error("Please clear queued messages before switching.");
+          if (ctx.hasUI && !await ctx.ui.confirm("切换 Codex 账号", `切换到 ${label} 并开启新 Pi 会话？`)) return;
+          const old = (await listAccounts()).current;
+          await backupHistory();
+          await useAccount(label);
+          try {
+            const result = await ctx.newSession();
+            if (result.cancelled) throw new Error("Session change was cancelled; account switch rolled back.");
+          } catch (error) {
+            if (old && old !== label) await useAccount(old);
+            throw error;
+          }
+        } else if (action === "backup" && !label) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          notify(`备份已创建：${await backupHistory()}（含 OAuth 凭据，请妥善保管）`);
+        } else if (action === "backups" && !label) {
+          notify((await listBackups()).join("\n") || "暂无备份");
+        } else if (action === "restore" && label && !extra) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          const contents = await inspectHistory(label);
+          if (!ctx.hasUI) throw new Error("Restore requires an interactive confirmation.");
+          if (!await ctx.ui.confirm("导入历史", `账号：${contents.profiles.join(", ") || "无"}；用量记录：${contents.records} 条。合并并先备份当前数据？同名账号不会覆盖。`)) return;
+          await backupHistory();
+          const restored = await importHistory(label);
+          dailyDate = "";
+          await updateDailyDate(generation);
+          await Promise.all(accountAggregators.map((view) => view.refresh()));
+          notify(`已导入 ${restored.profiles} 个账号、${restored.records} 条记录。`);
+        } else if (action === "reset" && label === "cache" && !extra) {
+          codex.value = undefined;
+          codex.lastAttemptAt = undefined;
+          if (active) await refresh("openai-codex", ctx, true);
+          notify("当前 Codex 额度缓存已清除并重新查询。");
+        } else if (action === "reset" && label === "usage" && extra) {
+          await ctx.waitForIdle();
+          await ledgerQueue;
+          const profile = (await listAccounts()).profiles.find((item) => item.name === extra);
+          if (!profile) throw new Error("Unknown account profile.");
+          if (!ctx.hasUI) throw new Error("Reset requires an interactive confirmation.");
+          if (!await ctx.ui.confirm("清除本地用量", `清除 ${extra} 的本地 Codex 用量？将先备份，不能重置 OpenAI 实际额度。`)) return;
+          const result = await resetAccountUsage(profile.accountId);
+          dailyDate = "";
+          await updateDailyDate(generation);
+          await Promise.all(accountAggregators.map((view) => view.refresh()));
+          notify(`已清除 ${result.removed} 条记录；备份：${result.backup}`);
+        } else notify("使用 /quota-account-list、/quota-account-save、/quota-account-use 等连字符命令。", "warning");
+      } catch (error) {
+        notify(safeAccountFailure(error), "error");
+      }
+  };
+  const accountCommands = [
+    ["quota-account-list", "list", "List Codex profiles"],
+    ["quota-account-current", "current", "Show current Codex profile"],
+    ["quota-account-save", "save", "Save current native Pi OAuth profile"],
+    ["quota-account-import", "import", "Import a native Pi OAuth profile"],
+    ["quota-account-use", "use", "Switch Codex account and start a new session"],
+    ["quota-account-delete", "delete", "Delete an inactive saved Codex profile"],
+    ["quota-account-backup", "backup", "Back up profiles and usage"],
+    ["quota-account-backups", "backups", "List account backups"],
+    ["quota-account-restore", "restore", "Restore account backup"],
+    ["quota-account-reset-cache", "reset cache", "Refresh current Codex quota cache"],
+    ["quota-account-reset-usage", "reset usage", "Reset local usage for an account"],
+  ] as const;
+  for (const [name, action, description] of accountCommands) {
+    pi.registerCommand(name, { description, handler: (args, ctx) => handleAccountCommand(`${action}${args.trim() ? ` ${args.trim()}` : ""}`, ctx) });
+  }
+
   pi.registerCommand("quota", {
     description: "Show quota and token details",
     handler: handleQuotaCommand,
@@ -353,8 +570,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     scheduler = undefined;
     const closingDashboard = dashboard;
     dashboard = undefined;
-    usageAggregator?.stop();
-    usageAggregator = undefined;
+    accountAggregators.forEach((view) => view.stop());
+    accountAggregators = [];
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
     currentContext = undefined;

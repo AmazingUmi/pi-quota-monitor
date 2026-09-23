@@ -38,6 +38,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("概览");
   expect(html).toContain("Token 消耗趋势");
   expect(html).toContain("chart-model");
+  expect(html).toContain("usage-account");
   expect([...html.matchAll(/<section class="section /g)]).toHaveLength(3);
   expect([...html.matchAll(/<h2 id="[^"]+">([^<]+)/g)].map((match) => match[1]))
     .toEqual(["概览", "剩余额度", "用量"]);
@@ -46,6 +47,10 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("当前周期可计价用量的公开 API 标价");
   expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
   expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
+  for (const id of ["account-profile", "account-save-form", "account-import-form", "account-use", "account-delete",
+    "account-backup", "account-backup-create", "account-restore", "account-reset-cache", "account-reset-usage"]) {
+    expect(html).toContain(`id="${id}"`);
+  }
   expect(html).not.toContain("当前会话 Token");
   expect(html).not.toContain("Cost");
   const css = await (await fetch(`${origin}/style.css`)).text();
@@ -62,6 +67,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(client).toContain("/api/refresh");
   expect(client).toContain("/api/statusbar");
   expect(client).toContain("quota-group");
+  expect(client).toContain("selectedAccount");
   Object.assign(state.usage, { ledgerPath: "/secret/usage.jsonl", credential: "secret" });
   Object.assign(state.usage.models[0], { ledgerPath: "/secret/usage.jsonl" });
   state.usage.timeline.hours.push({ bucket: String(Date.now()), provider: "openai-codex", model: "gpt", totalTokens: 240 });
@@ -116,4 +122,49 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   await dashboard.stop();
   running.pop();
   await expect(fetch(`${origin}/api/state`)).rejects.toThrow();
+});
+
+it("queues only allowlisted account commands behind the dashboard control check", async () => {
+  const accountCommand = vi.fn(async (_command: string, _args: string) => {});
+  const dashboard = new QuotaDashboard({
+    state: async () => ({ ...state, profiles: [{ name: "pro", accountId: "pro-id" }], backups: ["/private/backup.json"] }),
+    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, accountCommand,
+  });
+  running.push(dashboard);
+  const origin = await dashboard.start();
+  const payload = await (await fetch(`${origin}/api/state`)).json() as DashboardState & { control: string };
+  expect(payload.profiles).toEqual([{ name: "pro", accountId: "pro-id" }]);
+  expect(payload.backups).toEqual(["/private/backup.json"]);
+  const headers = { Origin: origin, "X-Quota-Control": payload.control, "Content-Type": "application/json" };
+  const post = (body: unknown, requestHeaders: Record<string, string> = headers) => fetch(`${origin}/api/account-command`, {
+    method: "POST", headers: requestHeaders, body: JSON.stringify(body),
+  });
+  expect((await post({ command: "use", args: "pro" })).status).toBe(200);
+  expect(accountCommand).toHaveBeenCalledWith("use", "pro");
+  expect((await post({ command: "import", args: "plus /path with spaces.json" })).status).toBe(200);
+  expect(accountCommand).toHaveBeenCalledWith("import", "plus /path with spaces.json");
+  for (const body of [{ command: "unknown", args: "pro" }, { command: "use", args: "pro\n/other" },
+    { command: "import", args: "pro" }, { command: "reset-usage", args: "../pro" }]) {
+    expect((await post(body)).status).toBe(400);
+  }
+  expect((await post({ command: "use", args: "pro" }, { ...headers, Origin: "https://evil.example" })).status).toBe(403);
+  expect(accountCommand).toHaveBeenCalledTimes(2);
+});
+
+it("selects historical account usage without claiming its quota belongs to that account", async () => {
+  const dashboard = new QuotaDashboard({
+    state: (requested) => ({ ...state,
+      accounts: [{ id: "account:pro", name: "Pro" }, { id: "account:plus", name: "Plus" }, { id: "legacy", name: "未归属历史" }],
+      currentAccountId: "account:pro", selectedAccountId: requested === "account:plus" ? requested : "account:pro",
+      codex: requested === "account:plus" ? {} : state.codex,
+    }),
+    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {},
+  });
+  running.push(dashboard);
+  const origin = await dashboard.start();
+  const payload = await (await fetch(`${origin}/api/state?account=account%3Aplus`)).json() as DashboardState;
+  expect(payload.selectedAccountId).toBe("account:plus");
+  expect(payload.currentAccountId).toBe("account:pro");
+  expect(payload.codex).toEqual({});
+  expect(JSON.stringify(payload)).not.toContain("refresh-token");
 });

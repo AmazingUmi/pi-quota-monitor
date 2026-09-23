@@ -48,7 +48,7 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   const fire = async (name: string, event = {}) => handlers.get(name)?.(event, ctx);
   cleanup.push(() => { void fire("session_shutdown"); });
   await fire("session_start");
-  expect(statuses[0]).toContain("OAI ?/? | AGY ?/?");
+  expect(statuses[0]).toContain("OAI -/- | AGY -/-");
   await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | AGY 84%/67%"));
   await fire("message_end", { message: {
     role: "assistant", provider: "openai-codex", model: "gpt", timestamp: Date.now(), stopReason: "stop",
@@ -128,9 +128,11 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
   const statuses: Array<{ key: string; text?: string }> = [];
   const notices: string[] = [];
+  const sendUserMessage = vi.fn();
   quotaMonitor({
     on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
     registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commands.set(name, options.handler); },
+    sendUserMessage,
   } as unknown as ExtensionAPI);
   const ctx = {
     mode: "rpc", hasUI: true,
@@ -142,7 +144,11 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
   cleanup.push(() => { void fire("session_shutdown"); });
   await fire("session_start");
-  expect([...commands.keys()]).toEqual(["quota", "quota-console", "quota-refresh", "quota-interval"]);
+  expect([...commands.keys()]).toEqual([
+    "quota-account-list", "quota-account-current", "quota-account-save", "quota-account-import", "quota-account-use", "quota-account-delete",
+    "quota-account-backup", "quota-account-backups", "quota-account-restore", "quota-account-reset-cache", "quota-account-reset-usage",
+    "quota", "quota-console", "quota-refresh", "quota-interval",
+  ]);
   await commands.get("quota-console")?.("", ctx);
   const url = notices.at(-1)?.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
   expect(url).toBeDefined();
@@ -159,6 +165,9 @@ it("keeps selected RPC status visible in the console and applies settings withou
   expect(payload).not.toHaveProperty("daily");
   const control = payload.control as string;
   const headers = { Origin: url!, "X-Quota-Control": control, "Content-Type": "application/json" };
+  const queued = await fetch(`${url}/api/account-command`, { method: "POST", headers, body: JSON.stringify({ command: "use", args: "pro" }) });
+  expect(queued.status).toBe(200);
+  expect(sendUserMessage).toHaveBeenCalledWith("/quota-account-use pro", { expandPromptTemplates: true });
   const { queryCodexQuota } = await import("../src/providers/codex.js");
   const callsBeforeRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
   const saved = await fetch(`${url}/api/statusbar`, { method: "POST", headers,

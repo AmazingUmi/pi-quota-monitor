@@ -24,6 +24,55 @@ describe("Codex", () => {
     expect(result.fiveHour?.resetAt).toBe(1780333200000);
   });
 
+  it("classifies a Pro weekly-only primary without inventing a five-hour quota", () => {
+    const result = parseCodexQuota({ plan_type: "pro", rate_limit: {
+      primary_window: { used_percent: 87, limit_window_seconds: 604800, reset_at: 1780506000 },
+      secondary_window: null,
+    } }, now);
+    expect(result.fiveHour).toBeUndefined();
+    expect(result.weekly?.remainingPercent).toBe(13);
+    expect(formatStatus({ value: result }, {}, emptyTotals(), false)).toContain("OAI -/13%");
+  });
+
+  it("treats a single Pro window without duration as weekly, but does not do so for Plus", () => {
+    const rate_limit = { primary_window: { used_percent: 87 }, secondary_window: null };
+    const pro = parseCodexQuota({ plan_type: "pro", rate_limit }, now);
+    const plus = parseCodexQuota({ plan_type: "plus", rate_limit }, now);
+    expect(pro.fiveHour).toBeUndefined();
+    expect(pro.weekly?.remainingPercent).toBe(13);
+    expect(formatStatus({ value: pro }, {}, emptyTotals(), false)).toContain("OAI -/13%");
+    expect(plus.weekly).toBeUndefined();
+    expect(formatStatus({ value: plus }, {}, emptyTotals(), false)).toContain("OAI -/-");
+  });
+
+  it("replaces only missing OAI values with dashes, preserving known weekly quota", () => {
+    const result = parseCodexQuota({ plan_type: "plus", rate_limit: {
+      primary_window: { used_percent: 89, limit_window_seconds: 604800 }, secondary_window: null,
+    } }, now);
+    expect(result.weekly?.remainingPercent).toBe(11);
+    expect(formatStatus({ value: result }, {}, emptyTotals(), false)).toContain("OAI -/11%");
+    const unknown = parseCodexQuota({ rate_limit: { primary_window: { used_percent: 89, limit_window_seconds: 604800 } } }, now);
+    expect(formatStatus({ value: unknown }, {}, emptyTotals(), false)).toContain("OAI -/11%");
+    expect(formatStatus({}, {}, emptyTotals(), false)).toContain("OAI -/-");
+  });
+
+  it("classifies windows by duration even when their positions are reversed", () => {
+    const result = parseCodexQuota({ rate_limit: {
+      primary_window: { used_percent: 87, limit_window_seconds: 604800 },
+      secondary_window: { used_percent: 20, limit_window_seconds: 18000 },
+    } }, now);
+    expect(result.fiveHour?.remainingPercent).toBe(80);
+    expect(result.weekly?.remainingPercent).toBe(13);
+  });
+
+  it("does not label an unknown-duration window as five-hour or weekly", () => {
+    const result = parseCodexQuota({ rate_limit: {
+      primary_window: { used_percent: 87 }, secondary_window: null,
+    } }, now);
+    expect(result.fiveHour).toBeUndefined();
+    expect(result.weekly).toBeUndefined();
+  });
+
   it("sends credentials only to the official origin and rejects redirects", async () => {
     const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       rate_limit: { primary_window: { used_percent: 50 } },
@@ -74,7 +123,7 @@ describe("Antigravity", () => {
     expect(groupWindow(result, "shared")?.remainingPercent).toBe(67);
     expect(result.models).toHaveLength(2);
     expect(result.summaryError).toBe("Summary unavailable");
-    expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY ?/?");
+    expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY -/-");
   });
 
   it("uses aggregate groups when present and keeps the restrictive bucket", () => {
@@ -88,6 +137,18 @@ describe("Antigravity", () => {
     expect(groupWindow(result, "gemini")?.remainingPercent).toBe(60);
     expect(groupWindow(result, "shared")?.remainingPercent).toBe(67);
     expect(formatStatus({}, { value: result }, emptyTotals(), false)).toContain("AGY 80%/60%");
+  });
+
+  it("replaces only missing AGY values with dashes, preserving known percentages", () => {
+    const weeklyOnly = parseAntigravityQuota(undefined, { groups: [
+      { displayName: "Gemini", buckets: [{ displayName: "Weekly", remainingFraction: 0.11 }] },
+    ] }, undefined, now);
+    expect(formatStatus({}, { value: weeklyOnly }, emptyTotals(), false)).toContain("AGY -/11%");
+    const fiveHourOnly = parseAntigravityQuota(undefined, { groups: [
+      { displayName: "Gemini", buckets: [{ displayName: "5h", remainingFraction: 0.84 }] },
+    ] }, undefined, now);
+    expect(formatStatus({}, { value: fiveHourOnly }, emptyTotals(), false)).toContain("AGY 84%/-");
+    expect(formatStatus({}, {}, emptyTotals(), false)).toContain("AGY -/-");
   });
 
   it("shows Gemini 5h/weekly quotas and the 5h reset, without the Claude/GPT value", () => {
@@ -140,7 +201,7 @@ it("counts reasoning as part of output and preserves last success in the status"
   expect(record?.reasoning).toBe(12000);
   expect(record?.totalTokens).toBe(321300);
   expect(formatStatus({ value: { capturedAt: now, fiveHour: { label: "5h", remainingPercent: 73 }, weekly: { label: "weekly", remainingPercent: 61 } }, error: "Query failed" }, {}, record!, false))
-    .toBe("OAI 73%/61% | AGY ?/? | ↑284k ↓37k");
+    .toBe("OAI 73%/61% | AGY -/- | ↑284k ↓37k");
 });
 
 it("bounds user-configurable refresh interval", () => {

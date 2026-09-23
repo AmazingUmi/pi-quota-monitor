@@ -45,6 +45,7 @@ export interface TokenUsageRecord extends TokenTotals {
   timestamp: number;
   provider: string;
   model: string;
+  accountId?: string;
 }
 
 export interface ProviderCache<T> {

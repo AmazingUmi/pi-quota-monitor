@@ -7,6 +7,13 @@ import { PRICE_TABLE } from "./tokens/pricing.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 export interface DashboardState {
+  accounts?: Array<{ id: string; name: string }>;
+  currentProfile?: string;
+  profiles?: Array<{ name: string; accountId: string }>;
+  backups?: string[];
+  accountNotice?: { message: string; level: "info" | "warning" | "error"; at: number };
+  selectedAccountId?: string;
+  currentAccountId?: string;
   codex: ProviderCache<CodexQuota>;
   antigravity: ProviderCache<AntigravityQuota>;
   usage: UsageSummary;
@@ -17,7 +24,8 @@ export interface DashboardState {
 }
 
 export interface DashboardActions {
-  state(): DashboardState;
+  state(accountId?: string): DashboardState | Promise<DashboardState>;
+  accountCommand?(command: string, args: string): Promise<void>;
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
   setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>): Promise<void>;
@@ -125,7 +133,7 @@ export class QuotaDashboard {
       } else if (pathname === "/style.css") {
         reply(res, 200, assets.style.toString("utf8"), "text/css; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { codex, antigravity, usage, context, quotaEstimates, config, updatedAt } = this.actions.state();
+        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, antigravity, usage, context, quotaEstimates, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
         const summary = {
           totals: publicTotals(usage.totals),
           models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
@@ -144,7 +152,7 @@ export class QuotaDashboard {
           },
           updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
         };
-        reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary,
+        reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
           quotaEstimates,
           config: { refreshIntervalSeconds: config.refreshIntervalSeconds,
@@ -158,7 +166,25 @@ export class QuotaDashboard {
       reply(res, 403, JSON.stringify({ error: "Forbidden" }));
       return;
     }
-    if (pathname === "/api/refresh") {
+    if (pathname === "/api/account-command") {
+      if (!this.actions.accountCommand) { reply(res, 404, JSON.stringify({ error: "Not found" })); return; }
+      let body: unknown;
+      try { body = await readSmallJson(req); }
+      catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
+      if (!body || typeof body !== "object" || Array.isArray(body)) { reply(res, 400, JSON.stringify({ error: "Invalid action" })); return; }
+      const { command, args } = body as { command?: unknown; args?: unknown };
+      const allowed = new Set(["save", "import", "use", "delete", "backup", "restore", "reset-cache", "reset-usage"]);
+      if (typeof command !== "string" || !allowed.has(command) || typeof args !== "string" || args.length > 800 || /[\r\n\u0000]/.test(args)) {
+        reply(res, 400, JSON.stringify({ error: "Invalid account command" })); return;
+      }
+      const name = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}";
+      const valid = command === "save" || command === "use" || command === "delete" || command === "reset-usage"
+        ? new RegExp(`^${name}$`).test(args)
+        : command === "import" ? new RegExp(`^${name} \\S.*$`).test(args)
+          : command === "restore" ? args.trim() === args && args.length > 0 : args === "";
+      if (!valid) { reply(res, 400, JSON.stringify({ error: "Invalid account arguments" })); return; }
+      await this.actions.accountCommand(command, args);
+    } else if (pathname === "/api/refresh") {
       await this.actions.refresh();
     } else if (pathname === "/api/interval") {
       let body: unknown;

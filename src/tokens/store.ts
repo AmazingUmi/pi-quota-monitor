@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { configDirectory } from "../config.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
+import { withLedgerLock } from "../history.js";
 
 export function localDate(timestamp: number): string {
   const now = new Date(timestamp);
@@ -15,10 +16,10 @@ function ledgerPath(day: string): string {
 
 export async function appendUsage(record: TokenUsageRecord): Promise<void> {
   await mkdir(configDirectory(), { recursive: true, mode: 0o700 });
-  await appendFile(ledgerPath(localDate(record.timestamp)), JSON.stringify(record) + "\n", { mode: 0o600 });
+  await withLedgerLock(() => appendFile(ledgerPath(localDate(record.timestamp)), JSON.stringify(record) + "\n", { mode: 0o600 }));
 }
 
-export async function readDailyUsage(day = localDate(Date.now())): Promise<TokenTotals> {
+export async function readDailyUsage(day = localDate(Date.now()), accountId?: string | null): Promise<TokenTotals> {
   let content: string;
   try { content = await readFile(ledgerPath(day), "utf8"); }
   catch (error) {
@@ -30,6 +31,8 @@ export async function readDailyUsage(day = localDate(Date.now())): Promise<Token
     try {
       const record = JSON.parse(line) as TokenUsageRecord;
       if (localDate(record.timestamp) !== day || ![record.input, record.output, record.reasoning, record.cacheRead, record.cacheWrite, record.totalTokens].every(Number.isFinite)) return totals;
+      if (record.provider === "openai-codex" && accountId !== undefined
+        && (accountId === null ? record.accountId !== undefined : record.accountId !== accountId)) return totals;
       return accumulate(totals, record);
     } catch { return totals; }
   }, emptyTotals());

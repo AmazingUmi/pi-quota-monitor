@@ -73,7 +73,20 @@
     </section>
 
     <section class="section usage-section" aria-labelledby="usage-title">
-      <div class="section-heading"><div><h2 id="usage-title">用量</h2><p>按 (Provider, Model) 汇总，覆盖账本中所有已记录日期。</p></div></div>
+      <div class="section-heading"><div><h2 id="usage-title">用量</h2><p>Codex 按账号隔离；Antigravity 用量在各账号视图中共享显示。</p></div><label for="usage-account">查看账本 <select id="usage-account"><option value="legacy">未归属历史</option></select></label></div>
+      <details class="account-panel panel" open>
+        <summary>账号管理与历史备份</summary>
+        <div class="account-content">
+          <p class="hint">OAuth 登录仍使用 Pi 的 /login。本页只接受 Pi 机器上的 profile 文件路径，不上传或展示 token。切换会在 Pi 中再次确认并开启新会话。</p>
+          <p>当前账号：<strong id="account-current">读取中…</strong></p>
+          <div class="account-row"><label for="account-profile">已保存账号</label><select id="account-profile"></select><button id="account-use" type="button">切换账号</button><button id="account-delete" type="button">删除 profile</button><button id="account-reset-usage" type="button">重置本地用量</button></div>
+          <form id="account-save-form" class="account-row"><label for="account-name">保存当前 OAuth 为</label><input id="account-name" name="name" placeholder="例如 pro" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><button type="submit">保存账号</button></form>
+          <form id="account-import-form" class="account-row"><label for="account-import-name">导入 profile</label><input id="account-import-name" placeholder="账号名称" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><input id="account-import-path" aria-label="Pi 机器上的 OAuth JSON 路径" placeholder="Pi 机器上的 JSON 路径" required><button type="submit">导入账号</button></form>
+          <div class="account-row"><label for="account-backup">历史备份</label><select id="account-backup"></select><button id="account-backup-create" type="button">创建备份</button><button id="account-restore" type="button">恢复备份</button><button id="account-reset-cache" type="button">重查额度</button></div>
+          <p class="hint">备份包含 OAuth token，保存在 Pi 机器的私有目录；不会自动删除。重置仅影响本地用量，不会重置 OpenAI 实际额度。</p>
+          <p id="account-feedback" class="hint" role="status" aria-live="polite"></p>
+        </div>
+      </details>
       <div class="panel usage-panel">
         <div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div>
         <div class="distribution">

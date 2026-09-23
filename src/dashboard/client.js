@@ -4,6 +4,8 @@ const $ = (id) => document.getElementById(id);
 let latest;
 let control;
 let busy = false;
+let selectedAccount;
+let lastAccountNoticeAt = 0;
 
 function money(value) {
   return `$${value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
@@ -35,7 +37,7 @@ function notice(parent, value) {
   el.textContent = value;
   parent.append(el);
 }
-function quotaWindow(parent, label, window, estimate) {
+function quotaWindow(parent, label, window, estimate, notApplicable = false) {
   const container = document.createElement("div");
   container.className = "quota-window";
   const name = document.createElement("span");
@@ -45,10 +47,10 @@ function quotaWindow(parent, label, window, estimate) {
   value.textContent = percent(window?.remainingPercent);
   const reset = document.createElement("small");
   reset.className = "subtle";
-  reset.textContent = window ? countdown(window.resetAt) : "未知 / 无数据";
+  reset.textContent = notApplicable ? "Pro 暂无 5 小时限制" : window ? countdown(window.resetAt) : "未知 / 无数据";
   if (typeof window?.resetAt === "number" && Number.isFinite(window.resetAt)) reset.dataset.resetAt = String(window.resetAt);
   container.append(name, value, reset);
-  if (estimate) {
+  if (estimate && !notApplicable) {
     const amount = document.createElement("small");
     amount.className = "quota-money";
     if (typeof estimate.estimatedPeriodUsd === "number" && typeof estimate.estimatedRemainingUsd === "number") {
@@ -92,11 +94,13 @@ function statusDetails(container, cache, extraErrors = []) {
   for (const error of extraErrors.filter(Boolean)) notice(container, `额度汇总错误：${error}`);
 }
 function renderCodex(cache) {
+  const historical = latest.currentAccountId && latest.selectedAccountId !== latest.currentAccountId;
   const result = cache.value;
-  $("codex-plan").textContent = result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
+  $("codex-plan").textContent = historical ? "历史账号：仅显示账本用量，不查询其当前额度" : result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
   const windows = $("codex-windows");
   windows.replaceChildren();
-  quotaWindow(windows, "5 小时窗口", result?.fiveHour, latest.quotaEstimates.codex.fiveHour);
+  quotaWindow(windows, "5 小时窗口", result?.fiveHour, latest.quotaEstimates.codex.fiveHour,
+    result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
   quotaWindow(windows, "每周窗口", result?.weekly, latest.quotaEstimates.codex.weekly);
   $("codex-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
   renderProviderErrors($("codex-error"), cache);
@@ -296,6 +300,41 @@ function renderPriceTable(pricing) {
 }
 function render() {
   if (!latest) return;
+  const account = $("usage-account");
+  const accountChoices = latest.accounts ?? [];
+  if (account.options.length !== accountChoices.length || accountChoices.some((choice, index) => account.options[index]?.value !== choice.id)) {
+    account.replaceChildren();
+    for (const choice of accountChoices) {
+      const option = document.createElement("option");
+      option.value = choice.id;
+      option.textContent = choice.name;
+      account.append(option);
+    }
+  }
+  account.value = latest.selectedAccountId ?? "legacy";
+  const profileSelect = $("account-profile");
+  const profiles = latest.profiles ?? [];
+  const previousProfile = profileSelect.value;
+  if (profileSelect.options.length !== profiles.length || profiles.some((profile, index) => profileSelect.options[index]?.value !== profile.name)) {
+    profileSelect.replaceChildren(...profiles.map((profile) => new Option(profile.name, profile.name)));
+    profileSelect.value = profiles.some((profile) => profile.name === previousProfile) ? previousProfile : latest.currentProfile ?? profiles[0]?.name ?? "";
+  }
+  $("account-current").textContent = latest.currentProfile ?? (latest.currentAccountId ? "尚未保存为 profile" : "未登录 / 无账号 ID");
+  $("account-use").disabled = busy || !profiles.length;
+  $("account-delete").disabled = busy || !profiles.length || profileSelect.value === latest.currentProfile;
+  $("account-reset-usage").disabled = busy || !profiles.length;
+  const backupSelect = $("account-backup");
+  const backups = latest.backups ?? [];
+  const previousBackup = backupSelect.value;
+  if (backupSelect.options.length !== backups.length || backups.some((path, index) => backupSelect.options[index]?.value !== path)) {
+    backupSelect.replaceChildren(...backups.map((path) => new Option(path.split(/[\\/]/).pop(), path)));
+    backupSelect.value = backups.includes(previousBackup) ? previousBackup : backups[0] ?? "";
+  }
+  $("account-restore").disabled = busy || !backups.length;
+  if (latest.accountNotice && latest.accountNotice.at > lastAccountNoticeAt) {
+    lastAccountNoticeAt = latest.accountNotice.at;
+    $("account-feedback").textContent = latest.accountNotice.message;
+  }
   const codex = latest.codex;
   const agy = latest.antigravity;
   renderCodex(codex);
@@ -391,11 +430,14 @@ function render() {
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }
 async function load() {
-  const response = await fetch("/api/state", { cache: "no-store" });
+  const requested = selectedAccount;
+  const response = await fetch(`/api/state${requested ? `?account=${encodeURIComponent(requested)}` : ""}`, { cache: "no-store" });
   if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota-console");
   const state = await response.json();
+  if (selectedAccount !== requested) return;
   control = state.control;
   latest = state;
+  selectedAccount = state.selectedAccountId;
   render();
   $("feedback").textContent = "";
 }
@@ -406,7 +448,12 @@ function syncStatusbarControls() {
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy"]) $(id).disabled = value;
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy",
+    "account-name", "account-import-name", "account-import-path", "account-backup-create", "account-reset-cache"]) $(id).disabled = value;
+  $("account-use").disabled = value || !(latest?.profiles?.length);
+  $("account-delete").disabled = value || !(latest?.profiles?.length) || $("account-profile").value === latest?.currentProfile;
+  $("account-reset-usage").disabled = value || !(latest?.profiles?.length);
+  $("account-restore").disabled = value || !(latest?.backups?.length);
 }
 async function action(path, body) {
   if (busy || !control) return;
@@ -427,7 +474,63 @@ async function action(path, body) {
     setBusy(false);
   }
 }
+async function queueAccountCommand(command, args = "") {
+  if (busy || !control) return;
+  setBusy(true);
+  $("account-feedback").textContent = "正在发送请求…";
+  try {
+    const response = await fetch("/api/account-command", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Quota-Control": control },
+      body: JSON.stringify({ command, args }),
+    });
+    if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
+    $("account-feedback").textContent = "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
+  } catch (error) {
+    $("account-feedback").textContent = error.message || "操作失败";
+  } finally { setBusy(false); }
+}
+const profileName = (value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+$("account-save-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = $("account-name").value.trim();
+  if (profileName(name)) void queueAccountCommand("save", name);
+});
+$("account-import-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = $("account-import-name").value.trim();
+  const path = $("account-import-path").value.trim();
+  if (!profileName(name) || !path || /[\r\n\u0000]/.test(path)) {
+    $("account-feedback").textContent = "名称或 Pi 机器上的 JSON 路径无效。";
+    return;
+  }
+  void queueAccountCommand("import", `${name} ${path}`);
+});
+$("account-use").addEventListener("click", () => {
+  const name = $("account-profile").value;
+  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认并开启新会话。`)) void queueAccountCommand("use", name);
+});
+$("account-profile").addEventListener("change", () => {
+  $("account-delete").disabled = busy || $("account-profile").value === latest?.currentProfile;
+});
+$("account-delete").addEventListener("click", () => {
+  const name = $("account-profile").value;
+  if (profileName(name) && confirm(`备份后删除 ${name} 的保存凭据？历史用量仍保留。`)) void queueAccountCommand("delete", name);
+});
+$("account-reset-usage").addEventListener("click", () => {
+  const name = $("account-profile").value;
+  if (profileName(name) && confirm(`先备份，再清除 ${name} 的本地 Codex 用量？不会重置 OpenAI 实际额度。`)) void queueAccountCommand("reset-usage", name);
+});
+$("account-backup-create").addEventListener("click", () => { void queueAccountCommand("backup"); });
+$("account-restore").addEventListener("click", () => {
+  const path = $("account-backup").value;
+  if (path && confirm(`导入备份 ${path.split(/[\\/]/).pop()}？Pi 中还会显示内容并要求确认。`)) void queueAccountCommand("restore", path);
+});
+$("account-reset-cache").addEventListener("click", () => { void queueAccountCommand("reset-cache"); });
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
+$("usage-account").addEventListener("change", (event) => {
+  selectedAccount = event.currentTarget.value;
+  void load().catch((error) => { $("feedback").textContent = error.message; });
+});
 $("chart-period").addEventListener("change", renderChart);
 $("chart-model").addEventListener("change", renderChart);
 $("interval-form").addEventListener("submit", (event) => {

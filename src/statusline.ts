@@ -33,8 +33,8 @@ function geminiTimedWindow(usage: AntigravityQuota | undefined, kind: "fiveHour"
   return matched.length ? matched.reduce((lowest, window) => window.remainingPercent < lowest.remainingPercent ? window : lowest) : undefined;
 }
 
-function percentage(value: number | undefined): string {
-  return value === undefined ? "?" : `${Math.round(value)}%`;
+function percentage(value: number | undefined, missing = "?"): string {
+  return value === undefined ? missing : `${Math.round(value)}%`;
 }
 
 export function formatStatus(
@@ -51,10 +51,12 @@ export function formatStatus(
   const geminiReset = showReset ? countdown(geminiFiveHour?.resetAt, now) : undefined;
   const parts: string[] = [];
   if (visibility.showOai !== false) {
-    parts.push(`OAI ${percentage(codex.value?.fiveHour?.remainingPercent)}/${percentage(codex.value?.weekly?.remainingPercent)}${codexReset ? ` ↻${codexReset}` : ""}`);
+    const fiveHour = percentage(codex.value?.fiveHour?.remainingPercent, "-");
+    const weekly = percentage(codex.value?.weekly?.remainingPercent, "-");
+    parts.push(`OAI ${fiveHour}/${weekly}${codexReset ? ` ↻${codexReset}` : ""}`);
   }
   if (visibility.showAgy !== false) {
-    parts.push(`AGY ${percentage(geminiFiveHour?.remainingPercent)}/${percentage(geminiWeekly?.remainingPercent)}${geminiReset ? ` ↻${geminiReset}` : ""}`);
+    parts.push(`AGY ${percentage(geminiFiveHour?.remainingPercent, "-")}/${percentage(geminiWeekly?.remainingPercent, "-")}${geminiReset ? ` ↻${geminiReset}` : ""}`);
   }
   parts.push(`↑${compactTokens(totals.input)} ↓${compactTokens(totals.output)}`);
   return parts.join(" | ");
@@ -76,7 +78,7 @@ export function formatDetails(
   const agy = antigravity.value;
   const lines = [
     `Quota monitor · refresh every ${interval}s`,
-    `Codex${codexResult?.plan ? ` (${codexResult.plan})` : ""}: 5h ${formatWindow(codexResult?.fiveHour)}; weekly ${formatWindow(codexResult?.weekly)}`,
+    `Codex${codexResult?.plan ? ` (${codexResult.plan})` : ""}: 5h ${codexResult?.plan?.toLowerCase() === "pro" && !codexResult.fiveHour ? "not applicable" : formatWindow(codexResult?.fiveHour)}; weekly ${formatWindow(codexResult?.weekly)}`,
     `Antigravity${agy?.plan ? ` (${agy.plan})` : ""}: Gemini ${formatWindow(groupWindow(agy, "gemini"))}; Claude/GPT ${formatWindow(groupWindow(agy, "shared"))}`,
     `Session: input ${session.input}, output ${session.output}, reasoning ${session.reasoning}, cacheRead ${session.cacheRead}, cacheWrite ${session.cacheWrite}, total ${session.totalTokens}`,
     `Today: input ${daily.input}, output ${daily.output}, reasoning ${daily.reasoning}, cacheRead ${daily.cacheRead}, cacheWrite ${daily.cacheWrite}, total ${daily.totalTokens}`,
