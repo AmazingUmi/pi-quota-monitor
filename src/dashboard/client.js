@@ -35,7 +35,7 @@ function notice(parent, value) {
   el.textContent = value;
   parent.append(el);
 }
-function quotaWindow(parent, label, window) {
+function quotaWindow(parent, label, window, estimate) {
   const container = document.createElement("div");
   container.className = "quota-window";
   const name = document.createElement("span");
@@ -48,6 +48,21 @@ function quotaWindow(parent, label, window) {
   reset.textContent = window ? countdown(window.resetAt) : "未知 / 无数据";
   if (typeof window?.resetAt === "number" && Number.isFinite(window.resetAt)) reset.dataset.resetAt = String(window.resetAt);
   container.append(name, value, reset);
+  if (estimate) {
+    const amount = document.createElement("small");
+    amount.className = "quota-money";
+    if (typeof estimate.estimatedPeriodUsd === "number" && typeof estimate.estimatedRemainingUsd === "number") {
+      amount.textContent = `已用金额约 ${money(estimate.observedCostUsd)} / ${percent(estimate.usedPercent)} · 周期约 ${money(estimate.estimatedPeriodUsd)} · 剩余约 ${money(estimate.estimatedRemainingUsd)}`;
+      container.append(amount);
+      const note = document.createElement("small");
+      note.className = "quota-estimate-note";
+      note.textContent = estimate.note;
+      container.append(note);
+    } else {
+      amount.textContent = estimate.note;
+      container.append(amount);
+    }
+  }
   parent.append(container);
 }
 function queryLabel(cache, partialError = false) {
@@ -81,8 +96,8 @@ function renderCodex(cache) {
   $("codex-plan").textContent = result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
   const windows = $("codex-windows");
   windows.replaceChildren();
-  quotaWindow(windows, "5 小时窗口", result?.fiveHour);
-  quotaWindow(windows, "每周窗口", result?.weekly);
+  quotaWindow(windows, "5 小时窗口", result?.fiveHour, latest.quotaEstimates.codex.fiveHour);
+  quotaWindow(windows, "每周窗口", result?.weekly, latest.quotaEstimates.codex.weekly);
   $("codex-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
   renderProviderErrors($("codex-error"), cache);
 }
@@ -100,7 +115,7 @@ function renderAntigravity(cache) {
   const groups = result?.groups ?? [];
   const models = result?.models ?? [];
   if (groups.length) {
-    for (const group of groups) {
+    for (const [groupIndex, group] of groups.entries()) {
       const section = document.createElement("section");
       section.className = "quota-group";
       const heading = document.createElement("h4");
@@ -109,11 +124,18 @@ function renderAntigravity(cache) {
       const items = document.createElement("div");
       items.className = "quota-windows";
       if (group.windows?.length) {
-        for (const window of group.windows) quotaWindow(items, window.label, window);
+        for (const [windowIndex, window] of group.windows.entries()) {
+          const estimate = latest.quotaEstimates.antigravity.groups[groupIndex]?.windows[windowIndex] ?? undefined;
+          quotaWindow(items, window.label, window, estimate);
+        }
       } else {
         const candidates = models.filter((model) => new RegExp(group.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(`${model.modelId} ${model.displayName ?? ""}`));
         if (candidates.length) {
           for (const model of candidates) quotaWindow(items, `${model.displayName ?? model.modelId} · 模型额度`, model);
+          const fallbackNote = document.createElement("small");
+          fallbackNote.className = "quota-estimate-note";
+          fallbackNote.textContent = "模型回退数据未提供可识别的 5 小时 / 每周窗口，未推算金额。";
+          section.append(fallbackNote);
         } else {
           quotaWindow(items, "额度窗口", undefined);
         }
@@ -136,7 +158,10 @@ function renderAntigravity(cache) {
       const items = document.createElement("div");
       items.className = "quota-windows";
       for (const model of groupModels) quotaWindow(items, model.displayName ?? model.modelId, model);
-      section.append(heading, items);
+      const fallbackNote = document.createElement("small");
+      fallbackNote.className = "quota-estimate-note";
+      fallbackNote.textContent = "旧版模型额度未提供可识别的 5 小时 / 每周窗口，未推算金额。";
+      section.append(heading, items, fallbackNote);
       container.append(section);
     }
   } else {

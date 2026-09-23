@@ -53,6 +53,21 @@ export interface ProviderCache<T> {
   error?: string;
 }
 
+export interface QuotaAmountEstimate {
+  note: string;
+  observedCostUsd?: number;
+  usedPercent?: number;
+  estimatedPeriodUsd?: number;
+  estimatedRemainingUsd?: number;
+  unpricedRecords?: number;
+  ledgerStale?: boolean;
+}
+
+export interface QuotaAmountEstimates {
+  codex: { fiveHour: QuotaAmountEstimate; weekly: QuotaAmountEstimate };
+  antigravity: { groups: Array<{ name: string; windows: Array<QuotaAmountEstimate | null> }> };
+}
+
 export interface MonitorConfig {
   refreshIntervalSeconds: number;
   staleAfterSeconds: number;

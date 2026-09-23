@@ -15,6 +15,7 @@ const state: DashboardState = {
   pricing: { asOf: "2026-09-23", estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 1, unpricedTokens: 240 },
   records: 1, invalidRecords: 0, updatedAt: Date.now(), stale: false },
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
+  quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
   config: { refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
     showOaiInStatusbar: true, showAgyInStatusbar: true },
   updatedAt: Date.now(),
@@ -42,6 +43,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
     .toEqual(["概览", "剩余额度", "用量"]);
   expect(html).toContain("关于数据");
   expect(html).toContain("状态与设置");
+  expect(html).toContain("当前周期可计价用量的公开 API 标价");
   expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
   expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
   expect(html).not.toContain("当前会话 Token");
@@ -53,6 +55,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(css).toContain(".overview-section { --section-accent:");
   expect(css).toContain(".usage-section { --section-accent:");
   expect(css).toContain(".quota-section { --section-accent:");
+  expect(css).toContain(".quota-money");
   const js = await fetch(`${origin}/client.js`);
   expect(js.status).toBe(200);
   const client = await js.text();
@@ -71,6 +74,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(payload.usage.totals.totalTokens).toBe(240);
   expect(payload.usage.timeline.hours[0]).toEqual({ bucket: state.usage.timeline.hours[0].bucket, provider: "openai-codex", model: "gpt", totalTokens: 240 });
   expect(payload.context).toEqual({ tokens: 70720, contextWindow: 272000, percent: 26 });
+  expect(payload.quotaEstimates).toEqual(state.quotaEstimates);
   expect((payload.usage.pricing as typeof payload.usage.pricing & { catalog: unknown[] }).catalog)
     .toContainEqual(expect.objectContaining({ model: "gpt-6-sol", rates: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 } }));
   expect(JSON.stringify(payload)).not.toContain("Bearer");

@@ -24,6 +24,22 @@ export interface UsageSummary {
   error?: string;
 }
 
+interface PeriodCost {
+  timestamp: number;
+  provider: string;
+  estimatedCostUsd: number;
+  pricedRecords: number;
+  unpricedRecords: number;
+  unpricedTokens: number;
+}
+
+export interface PeriodCostSummary {
+  estimatedCostUsd: number;
+  pricedRecords: number;
+  unpricedRecords: number;
+  unpricedTokens: number;
+}
+
 interface FileState {
   dev: number;
   ino: number;
@@ -34,10 +50,12 @@ interface FileState {
   invalidRecords: number;
   models: Map<string, ModelUsage>;
   hours: Map<string, TimeBucket>;
+  periodCosts: Map<string, PeriodCost>;
 }
 
 const FILE_NAME = /^usage-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const MAX_LINE = 1024 * 1024;
+const PERIOD_COST_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const keyFor = (provider: string, model: string) => JSON.stringify([provider, model]);
 
 function validRecord(value: unknown, day: string): value is TokenUsageRecord {
@@ -60,6 +78,20 @@ export class UsageAggregator {
   constructor(private readonly directory = configDirectory()) {}
 
   state(): UsageSummary { return this.summary; }
+
+  estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now()): PeriodCostSummary {
+    const result = { estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
+    for (const state of this.files.values()) {
+      for (const item of state.periodCosts.values()) {
+        if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt) continue;
+        result.estimatedCostUsd += item.estimatedCostUsd;
+        result.pricedRecords += item.pricedRecords;
+        result.unpricedRecords += item.unpricedRecords;
+        result.unpricedTokens += item.unpricedTokens;
+      }
+    }
+    return result;
+  }
 
   async start(): Promise<void> {
     await this.refresh();
@@ -108,8 +140,8 @@ export class UsageAggregator {
         if (!stat.isFile()) continue;
         const previous = this.files.get(name);
         const state: FileState = previous && previous.dev === stat.dev && previous.ino === stat.ino && stat.size >= previous.offset
-          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), hours: new Map(previous.hours) }
-          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), hours: new Map() };
+          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), hours: new Map(previous.hours), periodCosts: new Map(previous.periodCosts) }
+          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), hours: new Map(), periodCosts: new Map() };
         const day = FILE_NAME.exec(name)![1];
         if (stat.size > state.offset) {
           let bytes = 0;
@@ -123,6 +155,9 @@ export class UsageAggregator {
         }
         for (const [key, item] of state.hours) {
           if (Number(item.bucket) < firstHour) state.hours.delete(key);
+        }
+        for (const [key, item] of state.periodCosts) {
+          if (item.timestamp < now - PERIOD_COST_RETENTION_MS) state.periodCosts.delete(key);
         }
         files.set(name, state);
       } finally { await handle.close(); }
@@ -184,6 +219,18 @@ export class UsageAggregator {
           const key = keyFor(value.provider, value.model);
           const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
           const cost = estimateRecordCost(value);
+          if (value.timestamp >= Date.now() - PERIOD_COST_RETENTION_MS) {
+            const costKey = JSON.stringify([value.timestamp, value.provider]);
+            const periodCost = state.periodCosts.get(costKey);
+            state.periodCosts.set(costKey, {
+              timestamp: value.timestamp,
+              provider: value.provider,
+              estimatedCostUsd: (periodCost?.estimatedCostUsd ?? 0) + (cost ?? 0),
+              pricedRecords: (periodCost?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),
+              unpricedRecords: (periodCost?.unpricedRecords ?? 0) + (cost === undefined ? 1 : 0),
+              unpricedTokens: (periodCost?.unpricedTokens ?? 0) + (cost === undefined ? value.totalTokens : 0),
+            });
+          }
           state.models.set(key, { ...prior, ...accumulate(prior, value),
             estimatedCostUsd: prior.estimatedCostUsd + (cost ?? 0),
             pricedRecords: prior.pricedRecords + (cost === undefined ? 0 : 1),

@@ -53,6 +53,30 @@ it("sums per-record API-price estimates and keeps unknown models unpriced", asyn
   expect(restarted.state().pricing).toEqual(pricing);
 });
 
+it("aggregates priced and unpriced provider costs within exact quota-period boundaries", async () => {
+  const dir = await fixture();
+  const timestamp = Date.now() - 60_000;
+  const usageDay = localDate(timestamp);
+  const codex = { ...entry(usageDay, "openai-codex", "gpt-6-sol"), timestamp,
+    input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1_000_000 };
+  const antigravity = { ...entry(usageDay, "antigravity", "gemini-2.5-flash"), timestamp,
+    input: 1_000_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1_000_000 };
+  const unknown = { ...entry(usageDay, "openai-codex", "unknown-model"), timestamp,
+    input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 10 };
+  await writeFile(join(dir, `usage-${usageDay}.jsonl`), [codex, antigravity, unknown].map(line).join(""));
+  const aggregator = new UsageAggregator(dir);
+  await aggregator.refresh();
+  expect(aggregator.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp + 1)).toEqual({
+    estimatedCostUsd: 4, pricedRecords: 1, unpricedRecords: 1, unpricedTokens: 10,
+  });
+  expect(aggregator.estimateCostForPeriod("antigravity", timestamp - 1, timestamp + 1)).toEqual({
+    estimatedCostUsd: 0.3, pricedRecords: 1, unpricedRecords: 0, unpricedTokens: 0,
+  });
+  expect(aggregator.estimateCostForPeriod("openai-codex", timestamp, timestamp + 1).pricedRecords).toBe(1);
+  expect(aggregator.estimateCostForPeriod("openai-codex", timestamp + 1, timestamp + 2).pricedRecords).toBe(0);
+  expect(aggregator.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp).pricedRecords).toBe(0);
+});
+
 it("holds incomplete lines, skips damaged records, and processes external appends exactly once", async () => {
   const dir = await fixture();
   const path = join(dir, `usage-${day}.jsonl`);

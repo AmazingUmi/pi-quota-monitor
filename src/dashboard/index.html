@@ -37,6 +37,7 @@
 
     <section class="section quota-section" aria-labelledby="quota-title">
       <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>按 Provider 展示实际返回的额度组与窗口；缺少窗口数据时明确显示未知。</p></div><button id="refresh" type="button">立即刷新额度</button></div>
+      <p class="hint quota-estimate-explanation">金额为估算：以本插件当前周期可计价用量的公开 API 标价 ÷ Provider 报告的已用百分比，推算周期总额；剩余金额再乘剩余百分比。不是订阅实付或账户余额；插件启用前、未计价及非文本用量未计入，结果可能偏低。仅对可识别的 5 小时 / 每周窗口估算。</p>
       <div class="provider-grid">
         <article class="provider-card panel" aria-labelledby="codex-title">
           <header class="provider-heading"><div><h3 id="codex-title">OpenAI Codex</h3><p id="codex-plan" class="hint"></p></div></header>

@@ -101,7 +101,10 @@ tbody tr:hover { background: var(--hover); }
 .quota-window { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .quota-window .label { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .quota-window strong { font-size: clamp(22px, 2.5vw, 30px); font-weight: 600; font-variant-numeric: tabular-nums; }
-.quota-window small { min-height: 1.3em; color: var(--muted); font-size: 12px; }
+.quota-window small { min-height: 1.3em; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.quota-window .quota-money { color: var(--text); font-weight: 600; }
+.quota-estimate-note { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.quota-estimate-explanation { max-width: 1050px; margin: -6px 0 18px; }
 .quota-groups { display: flex; flex-direction: column; gap: 16px; }
 .quota-group h4 { margin-bottom: 9px; }
 .provider-meta { margin: 14px 0 0; color: var(--muted); font-size: 12px; }

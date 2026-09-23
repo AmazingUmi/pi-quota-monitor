@@ -4,13 +4,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import type { UsageSummary } from "./tokens/aggregate.js";
 import { PRICE_TABLE } from "./tokens/pricing.js";
-import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
+import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 export interface DashboardState {
   codex: ProviderCache<CodexQuota>;
   antigravity: ProviderCache<AntigravityQuota>;
   usage: UsageSummary;
   context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+  quotaEstimates: QuotaAmountEstimates;
   config: MonitorConfig;
   updatedAt: number;
 }
@@ -124,7 +125,7 @@ export class QuotaDashboard {
       } else if (pathname === "/style.css") {
         reply(res, 200, assets.style.toString("utf8"), "text/css; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { codex, antigravity, usage, context, config, updatedAt } = this.actions.state();
+        const { codex, antigravity, usage, context, quotaEstimates, config, updatedAt } = this.actions.state();
         const summary = {
           totals: publicTotals(usage.totals),
           models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
@@ -145,6 +146,7 @@ export class QuotaDashboard {
         };
         reply(res, 200, JSON.stringify({ codex, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
+          quotaEstimates,
           config: { refreshIntervalSeconds: config.refreshIntervalSeconds,
             showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
       } else {

@@ -47,6 +47,7 @@ pi list
 ## 已实现的 Console 功能
 
 - 本地独立页面采用参考 pi-web 与 OpenCode Console 的卡片式布局；样式在插件内定义，默认跟随系统浅色/深色，不读取 pi-web 主题或 CSS。采用“概览 → 剩余额度 → 用量”三级布局，提供两个 Provider 分块、可折叠的状态与设置、额度刷新、后台刷新间隔及 pi-web OAI / AGY 状态栏开关。支持窄屏、键盘焦点、加载/错误及空状态。
+- Codex 的 5 小时 / 每周窗口与可识别的 Antigravity 5 小时 / 每周窗口显示额度金额估算：以本插件在当前周期内按公开 API 标价计算的用量金额除以 Provider 报告的已用百分比，估算周期总额与剩余额度金额。不是订阅实付或账户余额；未记录、未计价及非文本用量会使结果不完整或偏低，缺少窗口周期 / 重置时间时不推算。
 - Token 总计覆盖本插件 `usage-YYYY-MM-DD.jsonl` 中**所有已记录日期**，不是插件启用前的完整 Pi 历史；明细以 `(provider, model)` 分组，同名模型跨 Provider 不合并，按 Total tokens 降序展示 Input、Output、Reasoning、Cache read、Cache write、Total tokens 及估算费用。Reasoning 属于 Output，不重复计数或计价。Console 不展示“当前会话/今日”Token 面板；TUI 状态栏与 `/quota` 的原有统计保持独立。
 - 趋势图支持最近 24 小时按小时、最近 30 天按日，以及全部模型或指定 Provider + 模型。概述展示全账本 Tokens、按公开 API 标价估算的费用、当前模型上下文占用；估算费用不等于 Codex/Antigravity 订阅实付金额或账户预算上限，未知价格记录单独标注未计价。可展开查看价格表和估算口径。
 - 初次以流式方式读取账本，后续轮询增量聚合；处理跨天、其他进程追加、半写行及损坏记录，避免重复计数。聚合失败时保留上次有效结果并标为过期。API 只输出汇总，不发送原始账本、文件路径或凭据；保持回环地址监听、CSP 和写请求校验。

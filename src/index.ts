@@ -7,8 +7,9 @@ import { RefreshScheduler } from "./scheduler.js";
 import { formatDetails, formatStatus } from "./statusline.js";
 import { UsageAggregator } from "./tokens/aggregate.js";
 import { accumulate, emptyTotals, tokenRecord } from "./tokens/collector.js";
+import { antigravityWindowDuration, estimateQuotaAmount, FIVE_HOURS_MS, ONE_WEEK_MS } from "./quota-estimate.js";
 import { appendUsage, localDate, readDailyUsage } from "./tokens/store.js";
-import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
+import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 const STATUS_KEY = "pi-quota-monitor";
 type ProviderId = "openai-codex" | "antigravity";
@@ -37,6 +38,33 @@ function branchTotals(ctx: ExtensionContext): TokenTotals {
     const record = tokenRecord(entry.message);
     return record ? accumulate(totals, record) : totals;
   }, emptyTotals());
+}
+
+function quotaAmountEstimates(
+  aggregator: UsageAggregator,
+  codex: ProviderCache<CodexQuota>,
+  antigravity: ProviderCache<AntigravityQuota>,
+): QuotaAmountEstimates {
+  const now = Date.now();
+  const ledgerStale = aggregator.state().stale;
+  const estimate = (provider: string, window: Parameters<typeof estimateQuotaAmount>[0], durationMs: number | undefined) =>
+    estimateQuotaAmount(window, durationMs,
+      (startAt, endAt) => aggregator.estimateCostForPeriod(provider, startAt, endAt), now, ledgerStale);
+  return {
+    codex: {
+      fiveHour: estimate("openai-codex", codex.value?.fiveHour,
+        (codex.value?.fiveHour?.windowMinutes ?? FIVE_HOURS_MS / 60_000) * 60_000),
+      weekly: estimate("openai-codex", codex.value?.weekly,
+        (codex.value?.weekly?.windowMinutes ?? ONE_WEEK_MS / 60_000) * 60_000),
+    },
+    antigravity: { groups: (antigravity.value?.groups ?? []).map((group) => ({
+      name: group.name,
+      windows: group.windows.map((window) => {
+        const durationMs = antigravityWindowDuration(window.label);
+        return durationMs === undefined ? null : estimate("antigravity", window, durationMs);
+      }),
+    })) },
+  };
 }
 
 export default function quotaMonitor(pi: ExtensionAPI): void {
@@ -248,7 +276,11 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!live(epoch)) { aggregator.stop(); return; }
           usageAggregator = aggregator;
           dashboard = new QuotaDashboard({
-            state: () => ({ codex, antigravity, usage: aggregator.state(), context: currentContext ? contextMetrics(currentContext) : null, config, updatedAt: Date.now() }),
+            state: () => {
+              const usage = aggregator.state();
+              return { codex, antigravity, usage, context: currentContext ? contextMetrics(currentContext) : null,
+                quotaEstimates: quotaAmountEstimates(aggregator, codex, antigravity), config, updatedAt: Date.now() };
+            },
             refresh: async () => {
               if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
               await refreshAll(currentContext, true);
