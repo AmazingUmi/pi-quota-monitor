@@ -1,0 +1,34 @@
+{
+  "name": "pi-quota-monitor",
+  "version": "0.1.0",
+  "description": "Real-time OpenAI Codex and Antigravity quota status for Pi",
+  "keywords": ["pi-package", "pi-extension", "quota", "pi-web"],
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.87.0",
+    "@earendil-works/pi-coding-agent": "0.87.0",
+    "@types/node": "^25.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
