@@ -392,7 +392,7 @@ function render() {
 }
 async function load() {
   const response = await fetch("/api/state", { cache: "no-store" });
-  if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota console");
+  if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota-console");
   const state = await response.json();
   control = state.control;
   latest = state;

@@ -91,12 +91,12 @@ it("queries the local agy provider natively without treating its sentinel as OAu
 
 it("keeps selected RPC status visible in the console and applies settings without disabling quotas", async () => {
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
-  let command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
   const statuses: Array<{ key: string; text?: string }> = [];
   const notices: string[] = [];
   quotaMonitor({
     on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
-    registerCommand: (_name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { command = options.handler; },
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commands.set(name, options.handler); },
   } as unknown as ExtensionAPI);
   const ctx = {
     mode: "rpc", hasUI: true,
@@ -108,12 +108,14 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
   cleanup.push(() => { void fire("session_shutdown"); });
   await fire("session_start");
-  await command?.("console", ctx);
+  expect([...commands.keys()]).toEqual(["quota", "quota-console", "quota-refresh", "quota-interval"]);
+  await commands.get("quota-console")?.("", ctx);
   const url = notices.at(-1)?.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
   expect(url).toBeDefined();
   expect(statuses.at(-1)?.key).toBe("pi-quota-monitor");
   expect(statuses.at(-1)?.text).toContain("OAI ");
   expect(statuses.at(-1)?.text).toContain("AGY ");
+  await commands.get("quota")?.("console", ctx); // Keep the old spaced spelling as an alias.
   const response = await fetch(`${url}/api/state`);
   expect(response.status).toBe(200);
   const payload = await response.json() as Record<string, unknown>;
@@ -134,9 +136,14 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const refreshResponse = await fetch(`${url}/api/refresh`, { method: "POST", headers });
   expect(refreshResponse.status).toBe(200);
   expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
-  await command?.("", ctx);
+  const callsBeforeNamedRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
+  await commands.get("quota-refresh")?.("", ctx);
+  expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeNamedRefresh);
+  await commands.get("quota")?.("", ctx);
   expect(notices.at(-1)).toContain("Codex");
   expect(statuses.at(-1)?.text).toBe("↑0 ↓0");
+  await commands.get("quota-interval")?.("240", ctx);
+  expect(vi.mocked(saveConfig)).toHaveBeenLastCalledWith(expect.objectContaining({ refreshIntervalSeconds: 240 }));
 
   const tuiContext = { ...ctx, mode: "tui" } as unknown as ExtensionContext;
   await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, tuiContext);

@@ -263,71 +263,85 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     }
   });
 
+  const handleQuotaCommand = async (args: string, ctx: ExtensionContext): Promise<void> => {
+    if (!active) return;
+    const epoch = generation;
+    const command = args.trim();
+    if (command === "console") {
+      if (!dashboard) {
+        const aggregator = new UsageAggregator();
+        await aggregator.start();
+        if (!live(epoch)) { aggregator.stop(); return; }
+        usageAggregator = aggregator;
+        dashboard = new QuotaDashboard({
+          state: () => {
+            const usage = aggregator.state();
+            return { codex, antigravity, usage, context: currentContext ? contextMetrics(currentContext) : null,
+              quotaEstimates: quotaAmountEstimates(aggregator, codex, antigravity), config, updatedAt: Date.now() };
+          },
+          refresh: async () => {
+            if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
+            await refreshAll(currentContext, true);
+            await updateDailyDate(epoch);
+          },
+          setInterval: (seconds) => setIntervalSeconds(seconds, epoch),
+          setStatusbar: (settings) => setStatusbarSettings(settings, epoch),
+        });
+      }
+      try {
+        const url = await dashboard.start();
+        if (!live(epoch)) return;
+        render(ctx); // Keep this extension's RPC statusbar entry visible according to its settings.
+        const message = `额度控制台：${url}（仅本机访问；本会话结束后关闭）`;
+        if (ctx.hasUI) ctx.ui.notify(message, "info");
+        else console.log(message);
+      } catch {
+        if (!live(epoch)) return;
+        dashboard = undefined;
+        usageAggregator?.stop();
+        usageAggregator = undefined;
+        render(ctx);
+        ctx.ui.notify("无法启动本地额度控制台。", "error");
+      }
+      return;
+    }
+    if (command === "refresh") {
+      await refreshAll(ctx, true);
+    } else if (command.startsWith("interval ")) {
+      const raw = command.slice("interval ".length).trim();
+      const seconds = Number(raw);
+      if (!/^\d+$/.test(raw) || !Number.isInteger(seconds) || seconds < 60 || seconds > 3600) {
+        ctx.ui.notify("Interval must be 60–3600 seconds.", "warning");
+        return;
+      }
+      try { await setIntervalSeconds(seconds, epoch); }
+      catch { if (live(epoch)) ctx.ui.notify("Unable to save refresh interval.", "error"); return; }
+    } else if (command) {
+      ctx.ui.notify("Use /quota, /quota-console, /quota-refresh, or /quota-interval <60-3600>.", "warning");
+      return;
+    }
+    await updateDailyDate(epoch);
+    if (!live(epoch)) return;
+    const details = formatDetails(codex, antigravity, sessionTotals, dailyTotals, config.refreshIntervalSeconds);
+    if (ctx.hasUI) ctx.ui.notify(details, "info");
+    else console.log(details);
+  };
+
   pi.registerCommand("quota", {
-    description: "Quota details; /quota console; /quota refresh; /quota interval <60-3600 seconds>",
-    handler: async (args, ctx) => {
-      if (!active) return;
-      const epoch = generation;
-      const command = args.trim();
-      if (command === "console") {
-        if (!dashboard) {
-          const aggregator = new UsageAggregator();
-          await aggregator.start();
-          if (!live(epoch)) { aggregator.stop(); return; }
-          usageAggregator = aggregator;
-          dashboard = new QuotaDashboard({
-            state: () => {
-              const usage = aggregator.state();
-              return { codex, antigravity, usage, context: currentContext ? contextMetrics(currentContext) : null,
-                quotaEstimates: quotaAmountEstimates(aggregator, codex, antigravity), config, updatedAt: Date.now() };
-            },
-            refresh: async () => {
-              if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
-              await refreshAll(currentContext, true);
-              await updateDailyDate(epoch);
-            },
-            setInterval: (seconds) => setIntervalSeconds(seconds, epoch),
-            setStatusbar: (settings) => setStatusbarSettings(settings, epoch),
-          });
-        }
-        try {
-          const url = await dashboard.start();
-          if (!live(epoch)) return;
-          render(ctx); // Keep this extension's RPC statusbar entry visible according to its settings.
-          const message = `额度控制台：${url}（仅本机访问；本会话结束后关闭）`;
-          if (ctx.hasUI) ctx.ui.notify(message, "info");
-          else console.log(message);
-        } catch {
-          if (!live(epoch)) return;
-          dashboard = undefined;
-          usageAggregator?.stop();
-          usageAggregator = undefined;
-          render(ctx);
-          ctx.ui.notify("无法启动本地额度控制台。", "error");
-        }
-        return;
-      }
-      if (command === "refresh") {
-        await refreshAll(ctx, true);
-      } else if (command.startsWith("interval ")) {
-        const raw = command.slice("interval ".length).trim();
-        const seconds = Number(raw);
-        if (!/^\d+$/.test(raw) || !Number.isInteger(seconds) || seconds < 60 || seconds > 3600) {
-          ctx.ui.notify("Interval must be 60–3600 seconds.", "warning");
-          return;
-        }
-        try { await setIntervalSeconds(seconds, epoch); }
-        catch { if (live(epoch)) ctx.ui.notify("Unable to save refresh interval.", "error"); return; }
-      } else if (command) {
-        ctx.ui.notify("Use /quota, /quota console, /quota refresh, or /quota interval <60-3600>.", "warning");
-        return;
-      }
-      await updateDailyDate(epoch);
-      if (!live(epoch)) return;
-      const details = formatDetails(codex, antigravity, sessionTotals, dailyTotals, config.refreshIntervalSeconds);
-      if (ctx.hasUI) ctx.ui.notify(details, "info");
-      else console.log(details);
-    },
+    description: "Show quota and token details",
+    handler: handleQuotaCommand,
+  });
+  pi.registerCommand("quota-console", {
+    description: "Open the local quota console",
+    handler: (_args, ctx) => handleQuotaCommand("console", ctx),
+  });
+  pi.registerCommand("quota-refresh", {
+    description: "Refresh Codex and Antigravity quotas",
+    handler: (_args, ctx) => handleQuotaCommand("refresh", ctx),
+  });
+  pi.registerCommand("quota-interval", {
+    description: "Set quota refresh interval (60–3600 seconds)",
+    handler: (args, ctx) => handleQuotaCommand(`interval ${args}`, ctx),
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

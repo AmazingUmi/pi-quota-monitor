@@ -17,16 +17,18 @@ pi list
 
 这是标准 Pi package 布局：`package.json` 的 `pi.extensions` 指向 `./src/index.ts`，Pi 直接加载 TypeScript；`src/` 中的控制台 HTML、CSS 与客户端脚本随包发布，测试与开发依赖不打入扩展包。
 
-**`pi --extension ./src/index.ts` 只对这一次 Pi CLI 进程生效，并不会给 pi-web 安装扩展。** 安装后在 pi-web 的「设置 → 插件」里选择「重新加载会话」，或打开新会话；仅刷新浏览器页面不保证现有 Pi 会话重新加载扩展。pi-web 通过 Pi RPC `setStatus` 在**聊天输入框下方的扩展状态栏**显示内容；它不是「工具」按钮。若需更清晰的独立视图，可用 `/quota console`。开发模式下可运行 `npm run check`。
+**`pi --extension ./src/index.ts` 只对这一次 Pi CLI 进程生效，并不会给 pi-web 安装扩展。** 安装后在 pi-web 的「设置 → 插件」里选择「重新加载会话」，或打开新会话；仅刷新浏览器页面不保证现有 Pi 会话重新加载扩展。pi-web 通过 Pi RPC `setStatus` 在**聊天输入框下方的扩展状态栏**显示内容；它不是「工具」按钮。若需更清晰的独立视图，可用 `/quota-console`。开发模式下可运行 `npm run check`。
 
 状态示例：`OAI 73%/61% ↻1h20m | AGY 95%/83% ↻2h17m | ↑284k ↓37k`。两组比例均依次为 **5 小时 / 每周**，AGY 状态栏默认只显示 Gemini，倒计时取 Gemini 的 5 小时窗口；Claude/GPT 仍可在 `/quota` 或控制台查看。`?` 表示没有对应窗口数据，而非 0%。旧版 OAuth Antigravity 汇总额度不可用（如免费账户的 `SUBSCRIPTION_REQUIRED`）时回退至各模型 `remainingFraction`，但无法识别其 5 小时/每周窗口时状态栏显示 `?/?`，不会误标窗口；本机 agy 使用 `/usage` 返回的 quota groups。同一窗口有多个额度时取最低剩余值。失败时保留**本会话**最后一次成功查询的额度；切换会话则重新查询。
 
 ## 命令与配置
 
 - `/quota`：完整额度、重置时间、当前会话及当日 Token 统计。
-- `/quota console`：启动本地控制台，返回 `http://127.0.0.1:<随机端口>`；复制链接到浏览器打开。控制台打开时 pi-web 仍按设置显示本扩展的 RPC 状态栏，其他扩展状态项不受影响。页面分为概览、剩余额度、用量三个区；剩余额度按 OpenAI Codex / Antigravity 分块，Antigravity 展示 Provider 实际返回的 quota groups / 模型及窗口，不假定固定窗口。用量区展示本插件账本中所有已记录日期的总计、按 `(provider, model)` 分组的明细；趋势图可切换最近 24 小时（按小时）/最近 30 天（按日），选择全部模型或指定 Provider + 模型。总计不覆盖插件启用前历史，也不显示当前会话/今日 Token 面板。概览显示**全部账本按公开 API 标价估算的费用**与当前模型上下文窗口占用（两者口径不同）；这不是订阅实际账单或账户预算上限。未知价格的模型单独标为未计价。
-- `/quota refresh`：强制刷新两个 Provider。
-- `/quota interval 180`：设置兜底刷新间隔（60–3600 秒），立即生效并保存。
+- `/quota-console`：启动本地控制台，返回 `http://127.0.0.1:<随机端口>`；复制链接到浏览器打开。控制台打开时 pi-web 仍按设置显示本扩展的 RPC 状态栏，其他扩展状态项不受影响。页面分为概览、剩余额度、用量三个区；剩余额度按 OpenAI Codex / Antigravity 分块，Antigravity 展示 Provider 实际返回的 quota groups / 模型及窗口，不假定固定窗口。用量区展示本插件账本中所有已记录日期的总计、按 `(provider, model)` 分组的明细；趋势图可切换最近 24 小时（按小时）/最近 30 天（按日），选择全部模型或指定 Provider + 模型。总计不覆盖插件启用前历史，也不显示当前会话/今日 Token 面板。概览显示**全部账本按公开 API 标价估算的费用**与当前模型上下文窗口占用（两者口径不同）；这不是订阅实际账单或账户预算上限。未知价格的模型单独标为未计价。
+- `/quota-refresh`：强制刷新两个 Provider。
+- `/quota-interval 180`：设置兜底刷新间隔（60–3600 秒），立即生效并保存。
+
+为便于 pi-web 自动补全，Console、刷新和间隔使用独立连字符命令。旧的 `/quota console`、`/quota refresh` 和 `/quota interval <秒>` 写法仍作为兼容别名。
 
 配置在 `~/.pi/agent/pi-quota-monitor/config.json`（尊重 `PI_CODING_AGENT_DIR`）：
 
