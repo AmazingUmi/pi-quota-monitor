@@ -9,12 +9,15 @@ Pi 扩展：显示 Codex / Antigravity 剩余额度和本地 Token 用量。除 
 在仓库目录安装为 Pi 包（供普通 Pi CLI 和 pi-web 会话自动加载）：
 
 ```bash
+# 在仓库根目录执行
 npm install
-pi install /Volumes/exDateDisk/projects/pi-usage_rt
+pi install .
 pi list
 ```
 
-上述绝对路径是本机示例；其他机器请换成仓库的绝对路径。**`pi -e ./src/index.ts` 只对这一次 Pi CLI 进程生效，并不会给 pi-web 安装扩展。** 安装后在 pi-web 的「设置 → 插件」里选择「重新加载会话」，或打开新会话；仅刷新浏览器页面不保证现有 Pi 会话重新加载扩展。pi-web 通过 Pi RPC `setStatus` 在**聊天输入框下方的扩展状态栏**显示内容；它不是「工具」按钮。若需更清晰的独立视图，可用 `/quota console`。开发模式下可运行 `npm run check`。
+这是标准 Pi package 布局：`package.json` 的 `pi.extensions` 指向 `./src/index.ts`，Pi 直接加载 TypeScript；`src/` 中的控制台 HTML、CSS 与客户端脚本随包发布，测试与开发依赖不打入扩展包。
+
+**`pi --extension ./src/index.ts` 只对这一次 Pi CLI 进程生效，并不会给 pi-web 安装扩展。** 安装后在 pi-web 的「设置 → 插件」里选择「重新加载会话」，或打开新会话；仅刷新浏览器页面不保证现有 Pi 会话重新加载扩展。pi-web 通过 Pi RPC `setStatus` 在**聊天输入框下方的扩展状态栏**显示内容；它不是「工具」按钮。若需更清晰的独立视图，可用 `/quota console`。开发模式下可运行 `npm run check`。
 
 状态示例：`OAI 73%/61% ↻1h20m | AGY 95%/83% ↻2h17m | ↑284k ↓37k`。两组比例均依次为 **5 小时 / 每周**，AGY 状态栏默认只显示 Gemini，倒计时取 Gemini 的 5 小时窗口；Claude/GPT 仍可在 `/quota` 或控制台查看。`?` 表示没有对应窗口数据，而非 0%。旧版 OAuth Antigravity 汇总额度不可用（如免费账户的 `SUBSCRIPTION_REQUIRED`）时回退至各模型 `remainingFraction`，但无法识别其 5 小时/每周窗口时状态栏显示 `?/?`，不会误标窗口；本机 agy 使用 `/usage` 返回的 quota groups。同一窗口有多个额度时取最低剩余值。失败时保留**本会话**最后一次成功查询的额度；切换会话则重新查询。
 
@@ -52,8 +55,6 @@ pi list
 - 趋势图支持最近 24 小时按小时、最近 30 天按日，以及全部模型或指定 Provider + 模型。概述展示全账本 Tokens、按公开 API 标价估算的费用、当前模型上下文占用；估算费用不等于 Codex/Antigravity 订阅实付金额或账户预算上限，未知价格记录单独标注未计价。可展开查看价格表和估算口径。
 - 初次以流式方式读取账本，后续轮询增量聚合；处理跨天、其他进程追加、半写行及损坏记录，避免重复计数。聚合失败时保留上次有效结果并标为过期。API 只输出汇总，不发送原始账本、文件路径或凭据；保持回环地址监听、CSP 和写请求校验。
 - 测试覆盖跨日期/Provider 汇总、Reasoning 不重复计数、空/损坏/半写账本、外部追加、重启恢复、费用估算及 API 安全；`npm run check` 运行类型检查和测试。
-
-下一阶段的布局与 pi-web 状态栏配置见 [Console 优化任务书](pi-quota-monitor-v0.1-task.md)。
 
 ## 参考
 
