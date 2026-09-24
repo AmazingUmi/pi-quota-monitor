@@ -24,6 +24,15 @@ describe("Codex", () => {
     expect(result.fiveHour?.resetAt).toBe(1780333200000);
   });
 
+  it("displays prolite as pro and applies Pro weekly-window rules", () => {
+    const result = parseCodexQuota({ plan_type: "ProLite", rate_limit: {
+      primary_window: { used_percent: 87 }, secondary_window: null,
+    } }, now);
+    expect(result.plan).toBe("pro");
+    expect(result.weekly?.remainingPercent).toBe(13);
+    expect(result.fiveHour).toBeUndefined();
+  });
+
   it("classifies a Pro weekly-only primary without inventing a five-hour quota", () => {
     const result = parseCodexQuota({ plan_type: "pro", rate_limit: {
       primary_window: { used_percent: 87, limit_window_seconds: 604800, reset_at: 1780506000 },

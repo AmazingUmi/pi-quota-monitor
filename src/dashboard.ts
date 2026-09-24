@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { isAbsolute } from "node:path";
 import type { UsageSummary } from "./tokens/aggregate.js";
 import { PRICE_TABLE } from "./tokens/pricing.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
@@ -146,8 +147,10 @@ export class QuotaDashboard {
               source: row.source, ...(row.longContext ? { longContext: { threshold: row.longContext.threshold, rates: { ...row.longContext.rates } } } : {}) })) },
           records: usage.records, invalidRecords: usage.invalidRecords,
           timeline: {
-            hours: usage.timeline.hours.map(({ bucket, provider, model, totalTokens }) => ({ bucket, provider, model, totalTokens })),
-            days: usage.timeline.days.map(({ bucket, provider, model, totalTokens }) => ({ bucket, provider, model, totalTokens })),
+            hours: usage.timeline.hours.map(({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords }) =>
+              ({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords })),
+            days: usage.timeline.days.map(({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords }) =>
+              ({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords })),
             today: usage.timeline.today, currentHour: usage.timeline.currentHour,
           },
           updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
@@ -181,7 +184,8 @@ export class QuotaDashboard {
       const valid = command === "save" || command === "use" || command === "delete" || command === "reset-usage"
         ? new RegExp(`^${name}$`).test(args)
         : command === "import" ? new RegExp(`^${name} \\S.*$`).test(args)
-          : command === "restore" ? args.trim() === args && args.length > 0 : args === "";
+          : command === "restore" ? args.trim() === args && args.length > 0
+            : command === "backup" ? args === "" || (isAbsolute(args) && args.trim() === args) : args === "";
       if (!valid) { reply(res, 400, JSON.stringify({ error: "Invalid account arguments" })); return; }
       await this.actions.accountCommand(command, args);
     } else if (pathname === "/api/refresh") {

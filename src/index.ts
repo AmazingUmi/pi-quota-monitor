@@ -43,6 +43,8 @@ function safeAccountFailure(error: unknown): string {
     "Unknown account profile.", "Reset requires an interactive confirmation.",
     "Restore requires an interactive confirmation.", "Delete requires an interactive confirmation.",
     "Switch to another account before deleting the active profile.",
+    "Backup directory must be an absolute path on the Pi machine.",
+    "Backup directory must be an existing private directory (0700).",
   ];
   return allowed.includes(message) ? message : "账号操作失败；请检查本地文件、权限及账号状态。";
 }
@@ -341,7 +343,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             if (!live(epoch)) throw new Error("Session is no longer active.");
             const listed = await listAccounts();
             const currentId = activeAccountId();
-            const accounts = [{ id: "legacy", name: "未归属历史" }];
+            const accounts = [{ id: "all", name: "总体用量" }];
             for (const item of listed.profiles) {
               const id = `account:${item.accountId}`;
               if (!accounts.some((account) => account.id === id)) accounts.push({ id, name: item.name });
@@ -355,7 +357,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             }
             for (const item of accounts) {
               if (views.has(item.id)) continue;
-              const view = new UsageAggregator(undefined, item.id === "legacy" ? null : item.id.slice("account:".length));
+              const view = new UsageAggregator(undefined, item.id === "all" ? undefined : item.id.slice("account:".length));
               await view.start();
               if (!live(epoch)) { view.stop(); throw new Error("Session is no longer active."); }
               views.set(item.id, view);
@@ -370,9 +372,11 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
         dashboard = new QuotaDashboard({
           state: async (requested) => {
             const { accounts, currentId, currentProfile, profiles } = await ensureViews();
-            const defaultId = currentId ? `account:${currentId}` : "legacy";
+            const defaultId = currentId ? `account:${currentId}` : "all";
             const selected = requested && views.has(requested) ? requested : defaultId;
             const view = views.get(selected)!;
+            // A saved historical account (or the overall ledger) has no live Codex
+            // quota. Show/estimate it only when the viewed accountId is active.
             const showingCurrent = currentId !== undefined && selected === `account:${currentId}`;
             const visibleCodex = showingCurrent && codexAccountId === currentId ? codex : {};
             return { accounts, currentProfile, profiles, backups: await listBackups(), accountNotice, selectedAccountId: selected,
@@ -440,9 +444,10 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   const handleAccountCommand = async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
       const raw = args.trim();
       const [action, first, second, surplus] = raw.split(/\s+/);
-      const label = action === "restore" ? raw.slice(action.length).trim() : first;
-      const extra = action === "restore" ? undefined : action === "import" && first ? raw.slice(action.length).trimStart().slice(first.length).trimStart() : second;
-      if (surplus && action !== "import" && action !== "restore") { ctx.ui.notify("参数过多。", "warning"); return; }
+      const pathAction = action === "restore" || action === "backup";
+      const label = pathAction ? raw.slice(action.length).trim() : first;
+      const extra = pathAction ? undefined : action === "import" && first ? raw.slice(action.length).trimStart().slice(first.length).trimStart() : second;
+      if (surplus && action !== "import" && !pathAction) { ctx.ui.notify("参数过多。", "warning"); return; }
       const notify = (text: string, level: "info" | "warning" | "error" = "info") => {
         accountNotice = { message: text, level, at: Math.max(Date.now(), (accountNotice?.at ?? 0) + 1) };
         if (ctx.hasUI) ctx.ui.notify(text, level);
@@ -487,10 +492,10 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             if (old && old !== label) await useAccount(old);
             throw error;
           }
-        } else if (action === "backup" && !label) {
+        } else if (action === "backup" && !extra) {
           await ctx.waitForIdle();
           await ledgerQueue;
-          notify(`备份已创建：${await backupHistory()}（含 OAuth 凭据，请妥善保管）`);
+          notify(`备份已创建：${await backupHistory(label || undefined)}（含 OAuth 凭据，请妥善保管）`);
         } else if (action === "backups" && !label) {
           notify((await listBackups()).join("\n") || "暂无备份");
         } else if (action === "restore" && label && !extra) {
@@ -534,7 +539,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     ["quota-account-import", "import", "Import a native Pi OAuth profile"],
     ["quota-account-use", "use", "Switch Codex account and start a new session"],
     ["quota-account-delete", "delete", "Delete an inactive saved Codex profile"],
-    ["quota-account-backup", "backup", "Back up profiles and usage"],
+    ["quota-account-backup", "backup", "Back up profiles and usage (optional private directory)"],
     ["quota-account-backups", "backups", "List account backups"],
     ["quota-account-restore", "restore", "Restore account backup"],
     ["quota-account-reset-cache", "reset cache", "Refresh current Codex quota cache"],

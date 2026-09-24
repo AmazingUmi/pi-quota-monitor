@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile, rename, rm, chmod } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, writeFile, rename, rm, chmod, lstat, realpath } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { configDirectory } from "./config.js";
 import { accountId, credential, listAccounts } from "./accounts.js";
@@ -66,15 +66,31 @@ async function snapshot(): Promise<Snapshot> {
   }
   return { schema: 1, createdAt: new Date().toISOString(), profiles: accounts, ledgers };
 }
-async function backupUnlocked(): Promise<string> {
-  await mkdir(backupDir(), { recursive: true, mode: 0o700 });
-  await chmod(backupDir(), 0o700);
-  const path = join(backupDir(), `backup-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`);
+async function backupLocation(directory?: string): Promise<string> {
+  if (directory === undefined) {
+    await mkdir(backupDir(), { recursive: true, mode: 0o700 });
+    await chmod(backupDir(), 0o700);
+    return backupDir();
+  }
+  if (!isAbsolute(directory) || /[\r\n\u0000]/.test(directory) || directory.trim() !== directory) {
+    throw new Error("Backup directory must be an absolute path on the Pi machine.");
+  }
+  // Do not create or chmod arbitrary paths. A custom directory must already be
+  // private; backup files contain OAuth credentials even though each file is 0600.
+  const info = await lstat(directory);
+  if (!info.isDirectory() || (process.platform !== "win32" && (info.mode & 0o077) !== 0)) {
+    throw new Error("Backup directory must be an existing private directory (0700).");
+  }
+  return realpath(directory);
+}
+async function backupUnlocked(directory?: string): Promise<string> {
+  const destination = await backupLocation(directory);
+  const path = join(destination, `backup-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`);
   await atomic(path, JSON.stringify(await snapshot()) + "\n");
   return path;
 }
-export async function backupHistory(): Promise<string> {
-  return withLedgerLock(backupUnlocked);
+export async function backupHistory(directory?: string): Promise<string> {
+  return withLedgerLock(() => backupUnlocked(directory));
 }
 export async function listBackups(): Promise<string[]> {
   await mkdir(backupDir(), { recursive: true, mode: 0o700 });

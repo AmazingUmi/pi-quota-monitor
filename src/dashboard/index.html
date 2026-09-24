@@ -11,14 +11,27 @@
 <body>
   <main class="shell">
     <header class="hero">
-      <div><p class="eyebrow">PI QUOTA MONITOR / CONSOLE</p><h1>Pi Quota Console</h1><p class="subtitle">概览 → 剩余额度 → 用量</p></div>
+      <div><p class="eyebrow">PI QUOTA MONITOR / CONSOLE</p><h1>Pi Quota Console</h1><p class="subtitle">控制管理 → 概览 → 剩余额度 → 用量</p></div>
       <span id="feedback" role="status" aria-live="polite"></span>
     </header>
 
+    <section class="section control-section" aria-labelledby="control-title">
+      <div class="section-heading"><div><h2 id="control-title">控制管理</h2><p>统一选择账本视图并管理账号与历史记录。</p></div><label for="usage-account">查看账本 <select id="usage-account"><option value="all">总体用量</option></select></label></div>
+      <div class="account-panel panel">
+        <h3>账号管理与历史</h3>
+        <div class="account-content">
+          <p>当前账号：<strong id="account-current">读取中…</strong></p>
+          <div class="account-row"><button id="account-use" type="button">切换账号</button><button id="account-add" type="button">新增账号</button><button id="account-manage" type="button">管理账号</button><button id="account-history" type="button">历史记录</button></div>
+          <p class="hint">切换账号将在 Pi 窗口确认并开启新会话。OAuth 登录仍使用 Pi 的 /login。</p>
+          <p id="account-feedback" class="hint" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </section>
+
     <section class="section overview-section" aria-labelledby="overview-title">
-      <div class="section-heading"><div><h2 id="overview-title">概览</h2><p>快速查看全账本用量、费用估算与当前模型上下文。</p></div></div>
+      <div class="section-heading"><div><h2 id="overview-title">概览</h2><p>快速查看所选账号账本用量、费用估算与当前模型上下文。</p></div></div>
       <div class="ledger-summary panel">
-        <span><strong>本地用量账本</strong> · 仅统计本插件启用后记录的用量。</span>
+        <span><strong>本地用量账本</strong> · 仅统计本插件启用后记录的用量；下方用量与金额随所选账号账本同步切换。</span>
         <details class="about-details">
           <summary aria-label="关于本地用量数据"><span class="help-mark" aria-hidden="true">?</span><span>关于数据</span></summary>
           <div class="about-copy">
@@ -29,14 +42,14 @@
         </details>
       </div>
       <div class="overview">
-        <article class="metric-card"><span>全部账本 Tokens</span><strong id="overview-tokens">—</strong><small id="overview-tokens-detail">正在读取本地账本…</small></article>
-        <article class="metric-card"><span>全部账本估算费用（USD）</span><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
+        <article class="metric-card"><span>所选账本 Tokens</span><strong id="overview-tokens">—</strong><small id="overview-tokens-detail">正在读取本地账本…</small></article>
+        <article class="metric-card"><span>所选账本估算费用（USD）</span><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
         <article class="metric-card"><span>当前模型上下文占用</span><strong id="overview-context">—</strong><small id="overview-context-detail">等待数据</small></article>
       </div>
     </section>
 
     <section class="section quota-section" aria-labelledby="quota-title">
-      <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>按 Provider 展示实际返回的额度组与窗口；缺少窗口数据时明确显示未知。</p></div><button id="refresh" type="button">立即刷新额度</button></div>
+      <div class="section-heading"><div><h2 id="quota-title">剩余额度</h2><p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Antigravity 额度独立于 Codex 账号，在各视图共享。</p></div><button id="refresh" type="button">立即刷新额度</button></div>
       <p class="hint quota-estimate-explanation">金额为估算：以本插件当前周期可计价用量的公开 API 标价 ÷ Provider 报告的已用百分比，推算周期总额；剩余金额再乘剩余百分比。不是订阅实付或账户余额；插件启用前、未计价及非文本用量未计入，结果可能偏低。仅对可识别的 5 小时 / 每周窗口估算。</p>
       <div class="provider-grid">
         <article class="provider-card panel" aria-labelledby="codex-title">
@@ -73,28 +86,49 @@
     </section>
 
     <section class="section usage-section" aria-labelledby="usage-title">
-      <div class="section-heading"><div><h2 id="usage-title">用量</h2><p>Codex 按账号隔离；Antigravity 用量在各账号视图中共享显示。</p></div><label for="usage-account">查看账本 <select id="usage-account"><option value="legacy">未归属历史</option></select></label></div>
-      <details class="account-panel panel" open>
-        <summary>账号管理与历史备份</summary>
-        <div class="account-content">
-          <p class="hint">OAuth 登录仍使用 Pi 的 /login。本页只接受 Pi 机器上的 profile 文件路径，不上传或展示 token。切换会在 Pi 中再次确认并开启新会话。</p>
-          <p>当前账号：<strong id="account-current">读取中…</strong></p>
-          <div class="account-row"><label for="account-profile">已保存账号</label><select id="account-profile"></select><button id="account-use" type="button">切换账号</button><button id="account-delete" type="button">删除 profile</button><button id="account-reset-usage" type="button">重置本地用量</button></div>
-          <form id="account-save-form" class="account-row"><label for="account-name">保存当前 OAuth 为</label><input id="account-name" name="name" placeholder="例如 pro" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><button type="submit">保存账号</button></form>
-          <form id="account-import-form" class="account-row"><label for="account-import-name">导入 profile</label><input id="account-import-name" placeholder="账号名称" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><input id="account-import-path" aria-label="Pi 机器上的 OAuth JSON 路径" placeholder="Pi 机器上的 JSON 路径" required><button type="submit">导入账号</button></form>
-          <div class="account-row"><label for="account-backup">历史备份</label><select id="account-backup"></select><button id="account-backup-create" type="button">创建备份</button><button id="account-restore" type="button">恢复备份</button><button id="account-reset-cache" type="button">重查额度</button></div>
-          <p class="hint">备份包含 OAuth token，保存在 Pi 机器的私有目录；不会自动删除。重置仅影响本地用量，不会重置 OpenAI 实际额度。</p>
-          <p id="account-feedback" class="hint" role="status" aria-live="polite"></p>
-        </div>
-      </details>
+      <div class="section-heading"><div><h2 id="usage-title">用量</h2><p>Codex 按账号隔离；Antigravity 用量在各账号视图中共享显示。</p></div></div>
+      <dialog id="account-switch-dialog" aria-labelledby="account-switch-title">
+        <div class="dialog-heading"><h3 id="account-switch-title">切换账号</h3><button type="button" class="dialog-close" data-close-dialog="account-switch-dialog" aria-label="关闭切换账号弹窗">×</button></div>
+        <div class="account-row"><label for="account-switch-profile">选择账号</label><select id="account-switch-profile"></select><button id="account-switch-confirm" type="button">确认切换</button></div>
+        <p class="hint">Pi 窗口还会要求确认，随后开启新会话。</p>
+        <p id="account-switch-feedback" class="hint" role="status" aria-live="polite"></p>
+      </dialog>
+      <dialog id="account-add-dialog" aria-labelledby="account-add-title">
+        <div class="dialog-heading"><h3 id="account-add-title">新增账号</h3><button type="button" class="dialog-close" data-close-dialog="account-add-dialog" aria-label="关闭新增账号弹窗">×</button></div>
+        <p class="hint">可保存当前 Pi OAuth，或从 Pi 机器上的 JSON 文件导入；不会上传或展示 token。</p>
+        <form id="account-save-form" class="account-row"><label for="account-name">保存当前 OAuth 为</label><input id="account-name" name="name" placeholder="例如 pro" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><button type="submit">保存账号</button></form>
+        <form id="account-import-form" class="account-row"><label for="account-import-name">导入 profile</label><input id="account-import-name" placeholder="账号名称" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><input id="account-import-path" aria-label="Pi 机器上的 OAuth JSON 路径" placeholder="Pi 机器上的 JSON 路径" required><button type="submit">导入账号</button></form>
+        <p id="account-add-feedback" class="hint" role="status" aria-live="polite"></p>
+      </dialog>
+      <dialog id="account-manage-dialog" aria-labelledby="account-manage-title">
+        <div class="dialog-heading"><h3 id="account-manage-title">管理账号</h3><button type="button" class="dialog-close" data-close-dialog="account-manage-dialog" aria-label="关闭管理账号弹窗">×</button></div>
+        <p class="hint">只能删除非当前账号的保存凭据；历史用量仍保留。</p>
+        <div class="account-row"><label for="account-manage-profile">已保存账号</label><select id="account-manage-profile"></select><button id="account-delete" type="button">删除 profile</button></div>
+        <p id="account-manage-feedback" class="hint" role="status" aria-live="polite"></p>
+      </dialog>
+      <dialog id="account-history-dialog" aria-labelledby="account-history-title">
+        <div class="dialog-heading"><h3 id="account-history-title">历史记录</h3><button type="button" class="dialog-close" data-close-dialog="account-history-dialog" aria-label="关闭历史记录弹窗">×</button></div>
+        <label for="backup-location">备份位置</label>
+        <div class="account-row"><select id="backup-location"><option value="default">插件私有目录（默认）</option><option value="custom">指定 Pi 机器上的目录</option></select><input id="backup-directory" aria-label="Pi 机器上的备份目录绝对路径" placeholder="Pi 机器上的私有目录绝对路径" hidden><button id="account-backup-create" type="button">创建备份</button></div>
+        <p class="hint">自定义目录须已存在且权限为 0700；备份文件包含 OAuth token，权限为 0600。不要选择共享目录。</p>
+        <div class="account-row"><label for="account-backup">默认目录备份</label><select id="account-backup"></select><button id="account-restore" type="button">恢复备份</button></div>
+        <div class="account-row"><label for="backup-restore-path">其他位置备份</label><input id="backup-restore-path" placeholder="Pi 机器上的备份文件绝对路径"><button id="account-restore-path" type="button">从路径恢复</button></div>
+        <div class="account-row"><label for="account-reset-profile">重置账号用量</label><select id="account-reset-profile"></select><button id="account-reset-usage" type="button">重置本地用量</button></div>
+        <p class="hint">自动备份及用量重置仍保存到插件私有目录。重置仅影响本地用量，不会重置 OpenAI 实际额度。</p>
+        <p id="history-feedback" class="hint" role="status" aria-live="polite"></p>
+      </dialog>
       <div class="panel usage-panel">
         <div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div>
         <div class="distribution">
-          <div class="chart-heading"><div><h3>Token 消耗趋势</h3><p class="hint">Total tokens · 本插件账本；小时刻度按浏览器本地时区显示。</p></div>
+          <div class="chart-heading"><div><h3>Token 与金额消耗趋势</h3><p class="hint">本插件账本 · 金额按每条记录的公开 API 价格估算；小时刻度按浏览器本地时区显示。</p></div>
             <div class="chart-controls"><label for="chart-period">时间</label><select id="chart-period"><option value="hours">最近 24 小时</option><option value="days">最近 30 天</option></select><label for="chart-model">模型</label><select id="chart-model"><option value="all">全部模型</option></select></div>
           </div>
+          <h3 class="trend-title">Token 消耗趋势</h3>
           <div id="chart" class="chart" role="img" aria-label="Token 消耗随时间变化图">正在读取本地账本…</div>
           <p id="chart-summary" class="hint" aria-live="polite"></p>
+          <h3 class="trend-title">金额消耗趋势（USD，估算）</h3>
+          <div id="cost-chart" class="chart" role="img" aria-label="估算金额消耗随时间变化图">正在读取本地账本…</div>
+          <p id="cost-chart-summary" class="hint" aria-live="polite"></p>
         </div>
         <h3 class="table-heading">各模型明细</h3>
         <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 与估算费用明细，可横向滚动"></div>

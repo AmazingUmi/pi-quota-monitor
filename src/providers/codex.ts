@@ -26,14 +26,17 @@ export function parseCodexQuota(payload: unknown, capturedAt = Date.now()): Code
   if (!primary && !secondary) throw new Error("Codex returned no quota windows.");
   // Pro can report a weekly primary with no secondary. Positions are not window types.
   const windows = [primary, secondary].filter((window): window is QuotaWindow => window !== undefined);
-  const isPro = cleanText(payload.plan_type)?.toLowerCase() === "pro";
+  // The Codex endpoint reports Pro Lite as `prolite`; show the user-facing Pro tier.
+  const rawPlan = cleanText(payload.plan_type);
+  const plan = rawPlan?.toLowerCase() === "prolite" ? "pro" : rawPlan;
+  const isPro = plan?.toLowerCase() === "pro";
   const fiveHour = windows.find((window) => window.windowMinutes !== undefined && window.windowMinutes >= 4 * 60 && window.windowMinutes <= 6 * 60);
   const weekly = windows.find((window) => window.windowMinutes !== undefined && window.windowMinutes >= 6 * 24 * 60 && window.windowMinutes <= 8 * 24 * 60)
     // Pro may report only one value without a duration; do not make this assumption for other plans.
     ?? (isPro && windows.length === 1 && windows[0].windowMinutes === undefined ? windows[0] : undefined);
   return {
     capturedAt,
-    ...(cleanText(payload.plan_type) ? { plan: cleanText(payload.plan_type) } : {}),
+    ...(plan ? { plan } : {}),
     ...(fiveHour ? { fiveHour } : {}),
     ...(weekly ? { weekly } : {}),
   };

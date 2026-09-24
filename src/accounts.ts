@@ -71,9 +71,13 @@ export async function listAccounts(): Promise<{ current?: string; profiles: Arra
     try { profiles.push({ name: label, accountId: (await readProfile(label)).accountId }); }
     catch { /* Do not expose contents of damaged credential files. */ }
   }
+  profiles.sort((a, b) => a.name.localeCompare(b.name));
   const selected = await current();
-  return { current: profiles.some((item) => item.name === selected && item.accountId === activeAccountId()) ? selected : undefined,
-    profiles: profiles.sort((a, b) => a.name.localeCompare(b.name)) };
+  const activeId = activeAccountId();
+  const matching = profiles.filter((item) => item.accountId === activeId);
+  // Native /login and older installs may have no current.json marker. The active
+  // OAuth accountId is authoritative; the marker only disambiguates aliases.
+  return { current: matching.find((item) => item.name === selected)?.name ?? matching[0]?.name, profiles };
 }
 export async function saveAccount(label: string): Promise<void> {
   name(label);
@@ -97,7 +101,7 @@ export async function useAccount(label: string): Promise<void> {
     if (!auth || typeof auth !== "object" || Array.isArray(auth)) throw new Error("Invalid Pi auth.json.");
     const data = auth as Record<string, unknown>;
     const source = credential(data[PROVIDER]);
-    const previous = await current();
+    const previous = (await listAccounts()).current;
     if (previous) {
       const saved = await readProfile(previous);
       if (saved.accountId !== source.accountId) throw new Error("Current profile differs from Pi login; save it before switching.");
@@ -122,11 +126,10 @@ export async function useAccount(label: string): Promise<void> {
 export async function deleteAccount(label: string): Promise<void> {
   name(label);
   await setup();
-  const selected = await current();
-  if (selected === label && activeAccountId() === (await readProfile(label)).accountId) {
+  const target = await readProfile(label);
+  if (activeAccountId() === target.accountId) {
     throw new Error("Switch to another account before deleting the active profile.");
   }
-  await readProfile(label);
   await rm(profilePath(label));
 }
 

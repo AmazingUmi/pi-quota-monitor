@@ -8,7 +8,7 @@ let selectedAccount;
 let lastAccountNoticeAt = 0;
 
 function money(value) {
-  return `$${value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
+  return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
 }
 function percent(value) {
   return typeof value === "number" && Number.isFinite(value) ? `${Math.round(value)}%` : "—";
@@ -94,16 +94,19 @@ function statusDetails(container, cache, extraErrors = []) {
   for (const error of extraErrors.filter(Boolean)) notice(container, `额度汇总错误：${error}`);
 }
 function renderCodex(cache) {
-  const historical = latest.currentAccountId && latest.selectedAccountId !== latest.currentAccountId;
-  const result = cache.value;
-  $("codex-plan").textContent = historical ? "历史账号：仅显示账本用量，不查询其当前额度" : result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
+  const viewingCurrent = !!latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId;
+  const selected = (latest.accounts ?? []).find((item) => item.id === latest.selectedAccountId)?.name ?? "所选账本";
+  const result = viewingCurrent ? cache.value : undefined;
+  $("codex-plan").textContent = viewingCurrent
+    ? `${selected} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
+    : `${selected} · 无法查询 Codex 实时额度及当期金额估算（仅当前登录账号可查询）`;
   const windows = $("codex-windows");
   windows.replaceChildren();
-  quotaWindow(windows, "5 小时窗口", result?.fiveHour, latest.quotaEstimates.codex.fiveHour,
+  quotaWindow(windows, "5 小时窗口", result?.fiveHour, viewingCurrent ? latest.quotaEstimates.codex.fiveHour : undefined,
     result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
-  quotaWindow(windows, "每周窗口", result?.weekly, latest.quotaEstimates.codex.weekly);
-  $("codex-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
-  renderProviderErrors($("codex-error"), cache);
+  quotaWindow(windows, "每周窗口", result?.weekly, viewingCurrent ? latest.quotaEstimates.codex.weekly : undefined);
+  $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
+  renderProviderErrors($("codex-error"), viewingCurrent ? cache : {});
 }
 function modelGroupName(model) {
   const name = `${model.modelId} ${model.displayName ?? ""}`;
@@ -113,7 +116,7 @@ function modelGroupName(model) {
 }
 function renderAntigravity(cache) {
   const result = cache.value;
-  $("agy-plan").textContent = result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据";
+  $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 独立于 Codex 账号，所有账本视图共享`;
   const container = $("agy-windows");
   container.replaceChildren();
   const groups = result?.groups ?? [];
@@ -192,7 +195,7 @@ function svgElement(name, attributes = {}, text) {
 function calendarDay(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
-function renderChart() {
+function renderTrend(field, chartId, summaryId) {
   if (!latest) return;
   const period = $("chart-period").value;
   const model = $("chart-model").value;
@@ -207,25 +210,31 @@ function renderChart() {
     return { bucket: String(hour), label: new Date(hour).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) };
   });
   const counts = new Map(slots.map(({ bucket }) => [bucket, 0]));
+  let priced = 0, unpriced = 0;
   for (const item of period === "days" ? latest.usage.timeline.days : latest.usage.timeline.hours) {
     if (counts.has(item.bucket) && (!selected || (item.provider === selected[0] && item.model === selected[1]))) {
-      counts.set(item.bucket, counts.get(item.bucket) + item.totalTokens);
+      counts.set(item.bucket, counts.get(item.bucket) + item[field]);
+      priced += item.pricedRecords;
+      unpriced += item.unpricedRecords;
     }
   }
   const values = slots.map(({ bucket }) => counts.get(bucket));
   const peak = Math.max(0, ...values);
   const total = values.reduce((sum, value) => sum + value, 0);
   const label = selected ? `${selected[0]} / ${selected[1]}` : "全部模型";
-  $("chart-summary").textContent = `${period === "days" ? "最近 30 天" : "最近 24 小时"} · ${label} · ${total.toLocaleString()} tokens${latest.usage.stale ? "（账本汇总已过期）" : ""}`;
-  const chart = $("chart");
-  chart.setAttribute("aria-label", `${label}在${period === "days" ? "最近30天" : "最近24小时"}消耗 ${total.toLocaleString()} tokens 的时间趋势`);
+  const isCost = field === "estimatedCostUsd";
+  const format = isCost ? money : (value) => value.toLocaleString();
+  const unit = isCost ? "（USD，估算）" : " tokens";
+  $(summaryId).textContent = `${period === "days" ? "最近 30 天" : "最近 24 小时"} · ${label} · ${format(total)}${unit}${isCost ? ` · ${priced} 条已计价${unpriced ? `，${unpriced} 条未计价未纳入金额` : ""}` : ""}${latest.usage.stale ? "（账本汇总已过期）" : ""}`;
+  const chart = $(chartId);
+  chart.setAttribute("aria-label", `${label}在${period === "days" ? "最近30天" : "最近24小时"}的${isCost ? "估算金额" : "Token"}消耗趋势，总计 ${format(total)}${unit}${isCost && unpriced ? `，${unpriced} 条未计价` : ""}`);
   chart.replaceChildren();
   const svg = svgElement("svg", { viewBox: "0 0 1000 290", role: "presentation", "aria-hidden": "true" });
   const left = 76, right = 972, top = 20, bottom = 245;
   for (let tick = 0; tick <= 2; tick++) {
     const y = bottom - tick * (bottom - top) / 2;
     svg.append(svgElement("line", { x1: left, x2: right, y1: y, y2: y, class: "grid-line" }));
-    svg.append(svgElement("text", { x: left - 13, y: y + 5, class: "axis-label", "text-anchor": "end" }, Math.round(peak * tick / 2).toLocaleString()));
+    svg.append(svgElement("text", { x: left - 13, y: y + 5, class: "axis-label", "text-anchor": "end" }, format(isCost ? peak * tick / 2 : Math.round(peak * tick / 2))));
   }
   const points = values.map((value, index) => {
     const x = left + index * (right - left) / (values.length - 1);
@@ -238,14 +247,18 @@ function renderChart() {
   for (let index = 0; index < slots.length; index++) {
     const { x, y, value } = points[index];
     const circle = svgElement("circle", { cx: x, cy: y, r: 3.5, class: "chart-point" });
-    circle.append(svgElement("title", {}, `${slots[index].label}: ${value.toLocaleString()} tokens`));
+    circle.append(svgElement("title", {}, `${slots[index].label}: ${format(value)}${unit}`));
     svg.append(circle);
     if (index === 0 || index === slots.length - 1 || index % (period === "days" ? 7 : 6) === 0) {
       svg.append(svgElement("text", { x, y: 279, class: "axis-label", "text-anchor": index === 0 ? "start" : index === slots.length - 1 ? "end" : "middle" }, slots[index].label));
     }
   }
   chart.append(svg);
-  if (!total) notice(chart, "所选时间与模型暂无 Token 记录。");
+  if (!total) notice(chart, isCost && unpriced ? "所选时段有未计价记录，无法计算这些记录的金额。" : `所选时间与模型暂无${isCost ? "可计价金额" : " Token 记录"}。`);
+}
+function renderChart() {
+  renderTrend("totalTokens", "chart", "chart-summary");
+  renderTrend("estimatedCostUsd", "cost-chart", "cost-chart-summary");
 }
 function renderPriceTable(pricing) {
   $("price-date").textContent = pricing.asOf;
@@ -311,17 +324,20 @@ function render() {
       account.append(option);
     }
   }
-  account.value = latest.selectedAccountId ?? "legacy";
-  const profileSelect = $("account-profile");
+  account.value = latest.selectedAccountId ?? "all";
   const profiles = latest.profiles ?? [];
-  const previousProfile = profileSelect.value;
-  if (profileSelect.options.length !== profiles.length || profiles.some((profile, index) => profileSelect.options[index]?.value !== profile.name)) {
-    profileSelect.replaceChildren(...profiles.map((profile) => new Option(profile.name, profile.name)));
-    profileSelect.value = profiles.some((profile) => profile.name === previousProfile) ? previousProfile : latest.currentProfile ?? profiles[0]?.name ?? "";
+  for (const id of ["account-switch-profile", "account-manage-profile", "account-reset-profile"]) {
+    const select = $(id);
+    const previous = select.value;
+    if (select.options.length !== profiles.length || profiles.some((profile, index) => select.options[index]?.value !== profile.name)) {
+      select.replaceChildren(...profiles.map((profile) => new Option(profile.name, profile.name)));
+      select.value = profiles.some((profile) => profile.name === previous) ? previous : latest.currentProfile ?? profiles[0]?.name ?? "";
+    }
   }
   $("account-current").textContent = latest.currentProfile ?? (latest.currentAccountId ? "尚未保存为 profile" : "未登录 / 无账号 ID");
   $("account-use").disabled = busy || !profiles.length;
-  $("account-delete").disabled = busy || !profiles.length || profileSelect.value === latest.currentProfile;
+  $("account-manage").disabled = busy || !profiles.length;
+  $("account-delete").disabled = busy || !profiles.length || $("account-manage-profile").value === latest.currentProfile;
   $("account-reset-usage").disabled = busy || !profiles.length;
   const backupSelect = $("account-backup");
   const backups = latest.backups ?? [];
@@ -331,9 +347,13 @@ function render() {
     backupSelect.value = backups.includes(previousBackup) ? previousBackup : backups[0] ?? "";
   }
   $("account-restore").disabled = busy || !backups.length;
+  $("account-restore-path").disabled = busy;
   if (latest.accountNotice && latest.accountNotice.at > lastAccountNoticeAt) {
     lastAccountNoticeAt = latest.accountNotice.at;
     $("account-feedback").textContent = latest.accountNotice.message;
+    $("history-feedback").textContent = latest.accountNotice.message;
+    const created = /^备份已创建：(.*?)（含 OAuth 凭据/.exec(latest.accountNotice.message);
+    if (created) $("backup-restore-path").value = created[1];
   }
   const codex = latest.codex;
   const agy = latest.antigravity;
@@ -341,17 +361,19 @@ function render() {
   renderAntigravity(agy);
   const codexStatus = $("codex-query-status");
   codexStatus.replaceChildren();
-  statusDetails(codexStatus, codex);
+  if (latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId) statusDetails(codexStatus, codex);
+  else row(codexStatus, "查询状态", "所选视图无法查询实时 Codex 额度");
   const agyStatus = $("agy-query-status");
   agyStatus.replaceChildren();
   statusDetails(agyStatus, agy, [agy.value?.summaryError]);
   const usage = latest.usage;
   $("overview-tokens").textContent = Number(usage.totals.totalTokens).toLocaleString();
-  $("overview-tokens-detail").textContent = !usage.records ? "暂无本插件记录的用量"
-    : `${usage.records.toLocaleString()} 条账本记录${usage.stale ? " · 汇总已过期" : ""}${usage.invalidRecords ? ` · ${usage.invalidRecords.toLocaleString()} 条损坏记录已跳过` : ""}`;
+  const ledgerName = accountChoices.find((choice) => choice.id === latest.selectedAccountId)?.name ?? "所选账号";
+  $("overview-tokens-detail").textContent = !usage.records ? `${ledgerName} · 暂无本插件记录的用量`
+    : `${ledgerName} · ${usage.records.toLocaleString()} 条账本记录${usage.stale ? " · 汇总已过期" : ""}${usage.invalidRecords ? ` · ${usage.invalidRecords.toLocaleString()} 条损坏记录已跳过` : ""}`;
   const pricing = usage.pricing;
   $("overview-cost").textContent = pricing.pricedRecords ? money(pricing.estimatedCostUsd) : "—";
-  $("overview-cost-detail").textContent = `${pricing.unpricedRecords
+  $("overview-cost-detail").textContent = `${ledgerName} · ${pricing.unpricedRecords
     ? `${pricing.pricedRecords ? "部分估算" : "暂无可估算费用"} · ${pricing.unpricedRecords.toLocaleString()} 条未计价（${pricing.unpricedTokens.toLocaleString()} tokens）`
     : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录"}${usage.stale ? " · 账本汇总已过期" : ""}`;
   const context = latest.context;
@@ -448,10 +470,13 @@ function syncStatusbarControls() {
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy",
-    "account-name", "account-import-name", "account-import-path", "account-backup-create", "account-reset-cache"]) $(id).disabled = value;
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy", "account-add", "account-history",
+    "account-name", "account-import-name", "account-import-path", "backup-location", "backup-directory", "backup-restore-path",
+    "account-backup-create", "account-restore-path"]) $(id).disabled = value;
   $("account-use").disabled = value || !(latest?.profiles?.length);
-  $("account-delete").disabled = value || !(latest?.profiles?.length) || $("account-profile").value === latest?.currentProfile;
+  $("account-switch-confirm").disabled = value || !(latest?.profiles?.length);
+  $("account-manage").disabled = value || !(latest?.profiles?.length);
+  $("account-delete").disabled = value || !(latest?.profiles?.length) || $("account-manage-profile").value === latest?.currentProfile;
   $("account-reset-usage").disabled = value || !(latest?.profiles?.length);
   $("account-restore").disabled = value || !(latest?.backups?.length);
 }
@@ -474,58 +499,85 @@ async function action(path, body) {
     setBusy(false);
   }
 }
-async function queueAccountCommand(command, args = "") {
+async function queueAccountCommand(command, args = "", feedbackId = "account-feedback", dialogId) {
   if (busy || !control) return;
   setBusy(true);
-  $("account-feedback").textContent = "正在发送请求…";
+  $(feedbackId).textContent = "正在发送请求…";
   try {
     const response = await fetch("/api/account-command", {
       method: "POST", headers: { "Content-Type": "application/json", "X-Quota-Control": control },
       body: JSON.stringify({ command, args }),
     });
     if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
-    $("account-feedback").textContent = "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
+    const message = "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
+    $(feedbackId).textContent = message;
+    if (dialogId) { $(dialogId).close(); $("account-feedback").textContent = message; }
   } catch (error) {
-    $("account-feedback").textContent = error.message || "操作失败";
+    $(feedbackId).textContent = error.message || "操作失败";
   } finally { setBusy(false); }
 }
 const profileName = (value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+$("account-use").addEventListener("click", () => { $("account-switch-dialog").showModal(); });
+$("account-add").addEventListener("click", () => { $("account-add-dialog").showModal(); });
+$("account-manage").addEventListener("click", () => { $("account-manage-dialog").showModal(); });
+$("account-history").addEventListener("click", () => { $("account-history-dialog").showModal(); });
+for (const button of document.querySelectorAll("[data-close-dialog]")) {
+  button.addEventListener("click", () => { $(button.dataset.closeDialog).close(); });
+}
 $("account-save-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const name = $("account-name").value.trim();
-  if (profileName(name)) void queueAccountCommand("save", name);
+  if (profileName(name)) void queueAccountCommand("save", name, "account-add-feedback", "account-add-dialog");
 });
 $("account-import-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const name = $("account-import-name").value.trim();
   const path = $("account-import-path").value.trim();
   if (!profileName(name) || !path || /[\r\n\u0000]/.test(path)) {
-    $("account-feedback").textContent = "名称或 Pi 机器上的 JSON 路径无效。";
+    $("account-add-feedback").textContent = "名称或 Pi 机器上的 JSON 路径无效。";
     return;
   }
-  void queueAccountCommand("import", `${name} ${path}`);
+  void queueAccountCommand("import", `${name} ${path}`, "account-add-feedback", "account-add-dialog");
 });
-$("account-use").addEventListener("click", () => {
-  const name = $("account-profile").value;
-  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认并开启新会话。`)) void queueAccountCommand("use", name);
+$("account-switch-confirm").addEventListener("click", () => {
+  const name = $("account-switch-profile").value;
+  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认并开启新会话。`)) {
+    void queueAccountCommand("use", name, "account-switch-feedback", "account-switch-dialog");
+  }
 });
-$("account-profile").addEventListener("change", () => {
-  $("account-delete").disabled = busy || $("account-profile").value === latest?.currentProfile;
+$("account-manage-profile").addEventListener("change", () => {
+  $("account-delete").disabled = busy || $("account-manage-profile").value === latest?.currentProfile;
 });
 $("account-delete").addEventListener("click", () => {
-  const name = $("account-profile").value;
-  if (profileName(name) && confirm(`备份后删除 ${name} 的保存凭据？历史用量仍保留。`)) void queueAccountCommand("delete", name);
+  const name = $("account-manage-profile").value;
+  if (profileName(name) && confirm(`备份后删除 ${name} 的保存凭据？历史用量仍保留。`)) void queueAccountCommand("delete", name, "account-manage-feedback", "account-manage-dialog");
 });
 $("account-reset-usage").addEventListener("click", () => {
-  const name = $("account-profile").value;
-  if (profileName(name) && confirm(`先备份，再清除 ${name} 的本地 Codex 用量？不会重置 OpenAI 实际额度。`)) void queueAccountCommand("reset-usage", name);
+  const name = $("account-reset-profile").value;
+  if (profileName(name) && confirm(`先备份，再清除 ${name} 的本地 Codex 用量？不会重置 OpenAI 实际额度。`)) void queueAccountCommand("reset-usage", name, "history-feedback");
 });
-$("account-backup-create").addEventListener("click", () => { void queueAccountCommand("backup"); });
-$("account-restore").addEventListener("click", () => {
-  const path = $("account-backup").value;
-  if (path && confirm(`导入备份 ${path.split(/[\\/]/).pop()}？Pi 中还会显示内容并要求确认。`)) void queueAccountCommand("restore", path);
+$("backup-location").addEventListener("change", () => {
+  $("backup-directory").hidden = $("backup-location").value !== "custom";
 });
-$("account-reset-cache").addEventListener("click", () => { void queueAccountCommand("reset-cache"); });
+$("account-backup-create").addEventListener("click", () => {
+  const directory = $("backup-location").value === "custom" ? $("backup-directory").value.trim() : "";
+  if ($("backup-location").value === "custom" && !directory) {
+    $("history-feedback").textContent = "请输入 Pi 机器上的私有目录绝对路径。";
+    return;
+  }
+  void queueAccountCommand("backup", directory, "history-feedback");
+});
+function requestRestore(path) {
+  if (path && confirm(`导入备份 ${path.split(/[\\/]/).pop()}？Pi 中还会显示内容并要求确认。`)) {
+    void queueAccountCommand("restore", path, "history-feedback");
+  }
+}
+$("account-restore").addEventListener("click", () => { requestRestore($("account-backup").value); });
+$("account-restore-path").addEventListener("click", () => {
+  const path = $("backup-restore-path").value.trim();
+  if (path) requestRestore(path);
+  else $("history-feedback").textContent = "请输入 Pi 机器上的备份文件路径。";
+});
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
 $("usage-account").addEventListener("change", (event) => {
   selectedAccount = event.currentTarget.value;

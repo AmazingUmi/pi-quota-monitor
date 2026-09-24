@@ -11,7 +11,10 @@ export interface ModelUsage extends TokenTotals {
   provider: string; model: string;
   estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number; unpricedTokens: number;
 }
-export interface TimeBucket { bucket: string; provider: string; model: string; totalTokens: number }
+export interface TimeBucket {
+  bucket: string; provider: string; model: string; totalTokens: number;
+  estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number;
+}
 export interface UsageSummary {
   totals: TokenTotals;
   models: ModelUsage[];
@@ -183,14 +186,21 @@ export class UsageAggregator {
         if (days.has(day)) {
           const bucketKey = JSON.stringify([day, item.provider, item.model]);
           const prior = daily.get(bucketKey);
-          daily.set(bucketKey, { bucket: day, provider: item.provider, model: item.model, totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens });
+          daily.set(bucketKey, { bucket: day, provider: item.provider, model: item.model,
+            totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens,
+            estimatedCostUsd: (prior?.estimatedCostUsd ?? 0) + item.estimatedCostUsd,
+            pricedRecords: (prior?.pricedRecords ?? 0) + item.pricedRecords,
+            unpricedRecords: (prior?.unpricedRecords ?? 0) + item.unpricedRecords });
         }
       }
       for (const item of state.hours.values()) {
         if (Number(item.bucket) < firstHour || Number(item.bucket) > now) continue;
         const bucketKey = JSON.stringify([item.bucket, item.provider, item.model]);
         const prior = hourly.get(bucketKey);
-        hourly.set(bucketKey, { ...item, totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens });
+        hourly.set(bucketKey, { ...item, totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens,
+          estimatedCostUsd: (prior?.estimatedCostUsd ?? 0) + item.estimatedCostUsd,
+          pricedRecords: (prior?.pricedRecords ?? 0) + item.pricedRecords,
+          unpricedRecords: (prior?.unpricedRecords ?? 0) + item.unpricedRecords });
       }
     }
     const sorted = [...models.values()].sort((a, b) => b.totalTokens - a.totalTokens || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
@@ -249,7 +259,11 @@ export class UsageAggregator {
             const bucket = String(hour);
             const hourKey = JSON.stringify([bucket, value.provider, value.model]);
             const previous = state.hours.get(hourKey);
-            state.hours.set(hourKey, { bucket, provider: value.provider, model: value.model, totalTokens: (previous?.totalTokens ?? 0) + value.totalTokens });
+            state.hours.set(hourKey, { bucket, provider: value.provider, model: value.model,
+              totalTokens: (previous?.totalTokens ?? 0) + value.totalTokens,
+              estimatedCostUsd: (previous?.estimatedCostUsd ?? 0) + (cost ?? 0),
+              pricedRecords: (previous?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),
+              unpricedRecords: (previous?.unpricedRecords ?? 0) + (cost === undefined ? 1 : 0) });
           }
           state.records++;
         } catch { state.invalidRecords++; }

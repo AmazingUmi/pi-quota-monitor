@@ -36,27 +36,44 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
   const html = await page.text();
   expect(html).toContain("概览");
-  expect(html).toContain("Token 消耗趋势");
+  expect(html).toContain("Token 与金额消耗趋势");
+  expect(html).toContain('id="cost-chart"');
+  expect(html).toContain('id="cost-chart-summary"');
   expect(html).toContain("chart-model");
   expect(html).toContain("usage-account");
-  expect([...html.matchAll(/<section class="section /g)]).toHaveLength(3);
+  expect([...html.matchAll(/<section class="section /g)]).toHaveLength(4);
   expect([...html.matchAll(/<h2 id="[^"]+">([^<]+)/g)].map((match) => match[1]))
-    .toEqual(["概览", "剩余额度", "用量"]);
+    .toEqual(["控制管理", "概览", "剩余额度", "用量"]);
   expect(html).toContain("关于数据");
   expect(html).toContain("状态与设置");
   expect(html).toContain("当前周期可计价用量的公开 API 标价");
   expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
   expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
-  for (const id of ["account-profile", "account-save-form", "account-import-form", "account-use", "account-delete",
-    "account-backup", "account-backup-create", "account-restore", "account-reset-cache", "account-reset-usage"]) {
+  for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
+    "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
+    "account-save-form", "account-import-form", "account-manage-profile", "account-delete",
+    "backup-location", "backup-directory", "backup-restore-path", "account-backup", "account-backup-create", "account-restore", "account-restore-path", "account-reset-profile", "account-reset-usage"]) {
     expect(html).toContain(`id="${id}"`);
   }
+  const controls = html.slice(html.indexOf('<section class="section control-section'), html.indexOf('<section class="section overview-section'));
+  expect([...controls.matchAll(/<button[^>]+>([^<]+)<\/button>/g)].map((match) => match[1]))
+    .toEqual(["切换账号", "新增账号", "管理账号", "历史记录"]);
+  expect(controls).toContain('id="usage-account"');
+  expect(controls).toContain('id="account-current"');
+  expect(html.indexOf('id="usage-account"')).toBeLessThan(html.indexOf('id="overview-title"'));
+  expect(html.indexOf('id="account-current"')).toBeLessThan(html.indexOf('id="overview-title"'));
+  expect(html.indexOf('id="account-backup"')).toBeLessThan(html.indexOf('id="tokens"'));
+  expect(html.indexOf('id="account-reset-usage"')).toBeLessThan(html.indexOf('id="tokens"'));
+  expect(html).toContain('<option value="all">总体用量</option>');
+  expect(html).not.toContain("未归属历史");
+  expect(html).not.toContain('id="account-reset-cache"');
   expect(html).not.toContain("当前会话 Token");
   expect(html).not.toContain("Cost");
   const css = await (await fetch(`${origin}/style.css`)).text();
   expect(css).toContain("prefers-color-scheme: dark");
   expect(css).toContain("#245bce");
   expect(css).toContain(".chart-line");
+  expect(css).toContain(".control-section { --section-accent:");
   expect(css).toContain(".overview-section { --section-accent:");
   expect(css).toContain(".usage-section { --section-accent:");
   expect(css).toContain(".quota-section { --section-accent:");
@@ -70,7 +87,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(client).toContain("selectedAccount");
   Object.assign(state.usage, { ledgerPath: "/secret/usage.jsonl", credential: "secret" });
   Object.assign(state.usage.models[0], { ledgerPath: "/secret/usage.jsonl" });
-  state.usage.timeline.hours.push({ bucket: String(Date.now()), provider: "openai-codex", model: "gpt", totalTokens: 240 });
+  state.usage.timeline.hours.push({ bucket: String(Date.now()), provider: "openai-codex", model: "gpt", totalTokens: 240,
+    estimatedCostUsd: 0.02, pricedRecords: 1, unpricedRecords: 0 });
   Object.assign(state.usage.timeline.hours[0], { ledgerPath: "/secret/usage.jsonl" });
   Object.assign(state.usage.pricing, { credential: "secret" });
   const result = await fetch(`${origin}/api/state`);
@@ -78,7 +96,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(payload.codex.value?.fiveHour?.remainingPercent).toBe(73);
   expect(payload.usage.models[0]?.provider).toBe("openai-codex");
   expect(payload.usage.totals.totalTokens).toBe(240);
-  expect(payload.usage.timeline.hours[0]).toEqual({ bucket: state.usage.timeline.hours[0].bucket, provider: "openai-codex", model: "gpt", totalTokens: 240 });
+  expect(payload.usage.timeline.hours[0]).toEqual({ bucket: state.usage.timeline.hours[0].bucket, provider: "openai-codex", model: "gpt", totalTokens: 240,
+    estimatedCostUsd: 0.02, pricedRecords: 1, unpricedRecords: 0 });
   expect(payload.context).toEqual({ tokens: 70720, contextWindow: 272000, percent: 26 });
   expect(payload.quotaEstimates).toEqual(state.quotaEstimates);
   expect((payload.usage.pricing as typeof payload.usage.pricing & { catalog: unknown[] }).catalog)
@@ -143,20 +162,26 @@ it("queues only allowlisted account commands behind the dashboard control check"
   expect(accountCommand).toHaveBeenCalledWith("use", "pro");
   expect((await post({ command: "import", args: "plus /path with spaces.json" })).status).toBe(200);
   expect(accountCommand).toHaveBeenCalledWith("import", "plus /path with spaces.json");
+  expect((await post({ command: "backup", args: "/private/backup dir" })).status).toBe(200);
+  expect(accountCommand).toHaveBeenCalledWith("backup", "/private/backup dir");
   for (const body of [{ command: "unknown", args: "pro" }, { command: "use", args: "pro\n/other" },
-    { command: "import", args: "pro" }, { command: "reset-usage", args: "../pro" }]) {
+    { command: "import", args: "pro" }, { command: "reset-usage", args: "../pro" },
+    { command: "backup", args: "relative/path" }]) {
     expect((await post(body)).status).toBe(400);
   }
   expect((await post({ command: "use", args: "pro" }, { ...headers, Origin: "https://evil.example" })).status).toBe(403);
-  expect(accountCommand).toHaveBeenCalledTimes(2);
+  expect(accountCommand).toHaveBeenCalledTimes(3);
 });
 
-it("selects historical account usage without claiming its quota belongs to that account", async () => {
+it("labels the all-accounts view and hides active Codex quota in other ledger views", async () => {
   const dashboard = new QuotaDashboard({
     state: (requested) => ({ ...state,
-      accounts: [{ id: "account:pro", name: "Pro" }, { id: "account:plus", name: "Plus" }, { id: "legacy", name: "未归属历史" }],
-      currentAccountId: "account:pro", selectedAccountId: requested === "account:plus" ? requested : "account:pro",
-      codex: requested === "account:plus" ? {} : state.codex,
+      accounts: [{ id: "all", name: "总体用量" }, { id: "account:pro", name: "Pro" }, { id: "account:plus", name: "Plus" }],
+      currentAccountId: "account:pro", selectedAccountId: requested === "account:plus" || requested === "all" ? requested : "account:pro",
+      codex: requested === "account:plus" || requested === "all" ? {} : state.codex,
+      quotaEstimates: requested === "account:plus" || requested === "all"
+        ? { ...state.quotaEstimates, codex: { fiveHour: { note: "此额度窗口暂无数据" }, weekly: { note: "此额度窗口暂无数据" } } }
+        : state.quotaEstimates,
     }),
     refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {},
   });
@@ -166,5 +191,11 @@ it("selects historical account usage without claiming its quota belongs to that 
   expect(payload.selectedAccountId).toBe("account:plus");
   expect(payload.currentAccountId).toBe("account:pro");
   expect(payload.codex).toEqual({});
+  expect(payload.quotaEstimates.codex.weekly.estimatedPeriodUsd).toBeUndefined();
+  const all = await (await fetch(`${origin}/api/state?account=all`)).json() as DashboardState;
+  expect(all.selectedAccountId).toBe("all");
+  expect(all.accounts?.[0]).toEqual({ id: "all", name: "总体用量" });
+  expect(all.codex).toEqual({});
+  expect(all.quotaEstimates.codex.fiveHour.estimatedPeriodUsd).toBeUndefined();
   expect(JSON.stringify(payload)).not.toContain("refresh-token");
 });
