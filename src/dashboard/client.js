@@ -6,6 +6,7 @@ let control;
 let busy = false;
 let selectedAccount;
 let lastAccountNoticeAt = 0;
+let portDirty = false;
 
 function money(value) {
   return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
@@ -30,12 +31,44 @@ function row(parent, label, value) {
   container.append(left, right);
   parent.append(container);
 }
-function notice(parent, value) {
+function notice(parent, value, neutral = false) {
   if (!value) return;
   const el = document.createElement("p");
-  el.className = "notice";
+  el.className = neutral ? "notice empty-state" : "notice";
   el.textContent = value;
   parent.append(el);
+}
+function windowKind(window) {
+  if (typeof window.windowMinutes === "number") return window.windowMinutes === 10080 ? "weekly" : window.windowMinutes === 300 ? "fiveHour" : "other";
+  if (/\bweek(?:ly)?\b|每周|周额度|周窗口/i.test(window.label)) return "weekly";
+  if (/\b5\s*[- ]?(?:h|hours?)\b|\bfive\s*[- ]?hours?\b|5\s*小时/i.test(window.label)) return "fiveHour";
+  return "other";
+}
+const WINDOW_LABELS = { weekly: "Weekly Limit Remaining", fiveHour: "5H Limit Remaining" };
+function orderedWindows(windows, estimates) {
+  const rank = { weekly: 0, fiveHour: 1, other: 2 };
+  // Pair estimates before sorting so weekly and 5H dollar values never get swapped.
+  return windows.map((window, index) => ({ window, estimate: estimates?.[index], kind: windowKind(window) }))
+    .sort((a, b) => rank[a.kind] - rank[b.kind]);
+}
+function quotaPie(label, remaining, notApplicable) {
+  const known = typeof remaining === "number" && Number.isFinite(remaining);
+  const amount = known ? Math.max(0, Math.min(100, remaining)) : 0;
+  const description = known ? `剩余 ${percent(amount)}，已用 ${percent(100 - amount)}` : notApplicable ? "不适用" : "暂无数据";
+  const svg = svgElement("svg", { class: "quota-pie", viewBox: "0 0 120 120", role: "img", "aria-label": `${label}：${description}` });
+  svg.dataset.level = amount <= 10 ? "low" : amount <= 25 ? "warning" : "normal";
+  svg.append(svgElement("title", {}, `${label}：${description}`));
+  svg.append(svgElement("circle", { cx: 60, cy: 60, r: 50, class: known ? "pie-used" : "pie-unknown" }));
+  if (known && amount === 100) {
+    svg.append(svgElement("circle", { cx: 60, cy: 60, r: 50, class: "pie-remaining" }));
+  } else if (known && amount > 0) {
+    const angle = amount / 100 * 2 * Math.PI;
+    const x = 60 + 50 * Math.sin(angle), y = 60 - 50 * Math.cos(angle);
+    svg.append(svgElement("path", { d: `M60 60 L60 10 A50 50 0 ${amount > 50 ? 1 : 0} 1 ${x} ${y} Z`, class: "pie-remaining" }));
+  } else if (!known) {
+    svg.append(svgElement("text", { x: 60, y: 65, "text-anchor": "middle", class: "pie-empty-label" }, notApplicable ? "N/A" : "—"));
+  }
+  return svg;
 }
 function quotaWindow(parent, label, window, estimate, notApplicable = false) {
   const container = document.createElement("div");
@@ -44,32 +77,80 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false) {
   name.className = "label";
   name.textContent = label;
   const value = document.createElement("strong");
-  value.textContent = percent(window?.remainingPercent);
+  const remaining = window?.remainingPercent;
+  const known = typeof remaining === "number" && Number.isFinite(remaining);
+  value.textContent = percent(remaining);
+  const valueRow = document.createElement("div");
+  valueRow.className = "quota-value";
+  const unit = document.createElement("span");
+  unit.className = "quota-unit";
+  unit.textContent = known ? "剩余" : notApplicable ? "不适用" : "暂无数据";
+  valueRow.append(value, unit);
+  const meter = document.createElement("meter");
+  meter.className = "quota-meter";
+  meter.min = 0;
+  meter.max = 100;
+  meter.value = known ? Math.max(0, Math.min(100, remaining)) : 0;
+  meter.hidden = !known;
+  meter.dataset.level = remaining <= 10 ? "low" : remaining <= 25 ? "warning" : "normal";
+  meter.setAttribute("aria-label", `${label}剩余百分比`);
   const reset = document.createElement("small");
   reset.className = "subtle";
   reset.textContent = notApplicable ? "Pro 暂无 5 小时限制" : window ? countdown(window.resetAt) : "未知 / 无数据";
   if (typeof window?.resetAt === "number" && Number.isFinite(window.resetAt)) reset.dataset.resetAt = String(window.resetAt);
-  container.append(name, value, reset);
+  const bar = document.createElement("div");
+  bar.className = "quota-bar";
+  bar.dataset.known = String(known);
+  bar.append(meter);
+  container.append(name, valueRow, bar, quotaPie(label, remaining, notApplicable), reset);
   if (estimate && !notApplicable) {
-    const amount = document.createElement("small");
+    const amount = document.createElement("details");
     amount.className = "quota-money";
+    amount.dataset.key = JSON.stringify([parent.dataset.group ?? "", label]);
+    const summary = document.createElement("summary");
+    const detail = document.createElement("p");
     if (typeof estimate.estimatedPeriodUsd === "number" && typeof estimate.estimatedRemainingUsd === "number") {
-      amount.textContent = `已用金额约 ${money(estimate.observedCostUsd)} / ${percent(estimate.usedPercent)} · 周期约 ${money(estimate.estimatedPeriodUsd)} · 剩余约 ${money(estimate.estimatedRemainingUsd)}`;
-      container.append(amount);
-      const note = document.createElement("small");
-      note.className = "quota-estimate-note";
-      note.textContent = estimate.note;
-      container.append(note);
+      summary.textContent = `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
+      const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ` : "";
+      const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
+      detail.textContent = `${interval}记录金额 ${money(estimate.observedCostUsd)} · ${tokens}额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
     } else {
-      amount.textContent = estimate.note;
-      container.append(amount);
+      summary.textContent = "金额暂不可估算";
+      detail.textContent = estimate.note;
+    }
+    amount.append(summary, detail);
+    container.append(amount);
+    if (estimate.unpricedRecords || estimate.ledgerStale) {
+      const warning = document.createElement("small");
+      warning.className = "quota-estimate-note";
+      warning.textContent = [estimate.unpricedRecords ? `${estimate.unpricedRecords} 条未计价，金额可能偏低` : "", estimate.ledgerStale ? "账本汇总已过期" : ""].filter(Boolean).join(" · ");
+      container.append(warning);
     }
   }
   parent.append(container);
 }
+// Keep open disclosures and keyboard focus stable during the five-second cache poll.
+function updateQuotaContent(container, data, scope, build) {
+  const fingerprint = JSON.stringify([scope, data]);
+  if (container.dataset.content === fingerprint) return;
+  const details = [...container.querySelectorAll("details[data-key]")];
+  const sameScope = container.dataset.scope === scope;
+  const openKeys = new Set(sameScope ? details.filter((item) => item.open).map((item) => item.dataset.key) : []);
+  const focusedKey = sameScope ? document.activeElement?.closest("details[data-key]")?.dataset.key : undefined;
+  const hadFocus = container.contains(document.activeElement);
+  container.replaceChildren();
+  build();
+  container.dataset.content = fingerprint;
+  container.dataset.scope = scope;
+  for (const detail of container.querySelectorAll("details[data-key]")) {
+    detail.open = openKeys.has(detail.dataset.key);
+    if (hadFocus && detail.dataset.key === focusedKey) detail.querySelector("summary").focus({ preventScroll: true });
+  }
+}
 function queryLabel(cache, partialError = false) {
   if (cache.error) return "查询失败";
   if (partialError) return "部分查询失败（使用可用数据）";
+  if (cache.restored && cache.value) return "已加载上次读数，等待刷新";
   if (cache.value) return "查询成功";
   return cache.lastAttemptAt ? "查询中 / 尚无成功结果" : "等待首次查询";
 }
@@ -79,6 +160,8 @@ function lastSuccess(cache) {
 function renderProviderErrors(container, cache, extraErrors = []) {
   const messages = [
     ...(cache.error ? [`查询错误：${cache.error}${cache.value ? "；已保留上次成功结果" : "；尚无可保留结果"}`] : []),
+    ...(cache.storageError ? [cache.storageError] : []),
+    ...(cache.restored && cache.value ? ["已加载上次保存的读数；以最近成功时间为准，后台正在刷新。"] : []),
     ...extraErrors.filter(Boolean).map((error) => `额度数据提示：${error}`),
   ];
   const fingerprint = JSON.stringify(messages);
@@ -90,6 +173,7 @@ function renderProviderErrors(container, cache, extraErrors = []) {
 function statusDetails(container, cache, extraErrors = []) {
   row(container, "查询状态", queryLabel(cache, extraErrors.some(Boolean)));
   row(container, "最近成功时间", lastSuccess(cache));
+  if (cache.storageError) notice(container, cache.storageError);
   if (cache.error) notice(container, `查询错误：${cache.error}${cache.value ? "（保留上次成功结果）" : ""}`);
   for (const error of extraErrors.filter(Boolean)) notice(container, `额度汇总错误：${error}`);
 }
@@ -101,10 +185,11 @@ function renderCodex(cache) {
     ? `${selected} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
     : `${selected} · 无法查询 Codex 实时额度及当期金额估算（仅当前登录账号可查询）`;
   const windows = $("codex-windows");
-  windows.replaceChildren();
-  quotaWindow(windows, "5 小时窗口", result?.fiveHour, viewingCurrent ? latest.quotaEstimates.codex.fiveHour : undefined,
-    result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
-  quotaWindow(windows, "每周窗口", result?.weekly, viewingCurrent ? latest.quotaEstimates.codex.weekly : undefined);
+  updateQuotaContent(windows, [result, latest.quotaEstimates.codex], latest.selectedAccountId ?? "all", () => {
+    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, viewingCurrent ? latest.quotaEstimates.codex.weekly : undefined);
+    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, viewingCurrent ? latest.quotaEstimates.codex.fiveHour : undefined,
+      result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
+  });
   $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
   renderProviderErrors($("codex-error"), viewingCurrent ? cache : {});
 }
@@ -116,67 +201,79 @@ function modelGroupName(model) {
 }
 function renderAntigravity(cache) {
   const result = cache.value;
-  $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 独立于 Codex 账号，所有账本视图共享`;
+  $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 所有账本视图共享`;
   const container = $("agy-windows");
-  container.replaceChildren();
-  const groups = result?.groups ?? [];
-  const models = result?.models ?? [];
-  if (groups.length) {
-    for (const [groupIndex, group] of groups.entries()) {
-      const section = document.createElement("section");
-      section.className = "quota-group";
-      const heading = document.createElement("h4");
-      heading.textContent = group.name;
-      section.append(heading);
-      const items = document.createElement("div");
-      items.className = "quota-windows";
-      if (group.windows?.length) {
-        for (const [windowIndex, window] of group.windows.entries()) {
-          const estimate = latest.quotaEstimates.antigravity.groups[groupIndex]?.windows[windowIndex] ?? undefined;
-          quotaWindow(items, window.label, window, estimate);
+  updateQuotaContent(container, [result, latest.quotaEstimates.antigravity], "antigravity", () => {
+    const groups = result?.groups ?? [];
+    const models = result?.models ?? [];
+    if (groups.length) {
+      for (const [groupIndex, group] of groups.entries()) {
+        const windows = orderedWindows(group.windows ?? [], latest.quotaEstimates.antigravity.groups[groupIndex]?.windows);
+        // Additional groups remain scannable, with full windows available on demand.
+        const collapsible = groupIndex > 0;
+        const section = document.createElement(collapsible ? "details" : "section");
+        section.className = collapsible ? "quota-group quota-group-more" : "quota-group";
+        const heading = document.createElement(collapsible ? "summary" : "h4");
+        heading.textContent = group.name;
+        if (collapsible) {
+          section.dataset.key = JSON.stringify(["group", group.name]);
+          const summary = document.createElement("span");
+          summary.className = "group-quota-summary";
+          summary.textContent = windows.length ? `${windows.map(({ window }) => percent(window.remainingPercent)).join(" / ")} 剩余` : "查看额度";
+          summary.title = windows.map(({ window, kind }) => `${WINDOW_LABELS[kind] ?? window.label}: ${percent(window.remainingPercent)}`).join(" · ");
+          heading.append(summary);
         }
-      } else {
-        const candidates = models.filter((model) => new RegExp(group.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(`${model.modelId} ${model.displayName ?? ""}`));
-        if (candidates.length) {
-          for (const model of candidates) quotaWindow(items, `${model.displayName ?? model.modelId} · 模型额度`, model);
-          const fallbackNote = document.createElement("small");
-          fallbackNote.className = "quota-estimate-note";
-          fallbackNote.textContent = "模型回退数据未提供可识别的 5 小时 / 每周窗口，未推算金额。";
-          section.append(fallbackNote);
+        section.append(heading);
+        const items = document.createElement("div");
+        items.className = "quota-windows";
+        items.dataset.group = group.name;
+        if (windows.length) {
+          for (const { window, estimate, kind } of windows) {
+            quotaWindow(items, WINDOW_LABELS[kind] ?? window.label, window, estimate);
+          }
         } else {
-          quotaWindow(items, "额度窗口", undefined);
+          const candidates = models.filter((model) => new RegExp(group.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(`${model.modelId} ${model.displayName ?? ""}`));
+          if (candidates.length) {
+            for (const model of candidates) quotaWindow(items, `${model.displayName ?? model.modelId} · 模型额度`, model);
+            const fallbackNote = document.createElement("small");
+            fallbackNote.className = "quota-estimate-note";
+            fallbackNote.textContent = "模型回退数据未提供可识别的 5 小时 / 每周窗口，未推算金额。";
+            section.append(fallbackNote);
+          } else {
+            quotaWindow(items, "额度窗口", undefined);
+          }
         }
+        section.append(items);
+        container.append(section);
       }
-      section.append(items);
-      container.append(section);
+    } else if (models.length) {
+      const grouped = new Map();
+      for (const model of models) {
+        const name = modelGroupName(model);
+        if (!grouped.has(name)) grouped.set(name, []);
+        grouped.get(name).push(model);
+      }
+      for (const [name, groupModels] of grouped) {
+        const section = document.createElement("section");
+        section.className = "quota-group";
+        const heading = document.createElement("h4");
+        heading.textContent = name;
+        const items = document.createElement("div");
+        items.className = "quota-windows";
+        for (const model of groupModels) quotaWindow(items, model.displayName ?? model.modelId, model);
+        const fallbackNote = document.createElement("small");
+        fallbackNote.className = "quota-estimate-note";
+        fallbackNote.textContent = "旧版模型额度未提供可识别的 5 小时 / 每周窗口，未推算金额。";
+        section.append(heading, items, fallbackNote);
+        container.append(section);
+      }
+    } else {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = result ? "暂无额度窗口或模型额度数据。" : "尚无成功查询结果；额度数据未知。";
+      container.append(empty);
     }
-  } else if (models.length) {
-    const grouped = new Map();
-    for (const model of models) {
-      const name = modelGroupName(model);
-      if (!grouped.has(name)) grouped.set(name, []);
-      grouped.get(name).push(model);
-    }
-    for (const [name, groupModels] of grouped) {
-      const section = document.createElement("section");
-      section.className = "quota-group";
-      const heading = document.createElement("h4");
-      heading.textContent = name;
-      const items = document.createElement("div");
-      items.className = "quota-windows";
-      for (const model of groupModels) quotaWindow(items, model.displayName ?? model.modelId, model);
-      const fallbackNote = document.createElement("small");
-      fallbackNote.className = "quota-estimate-note";
-      fallbackNote.textContent = "旧版模型额度未提供可识别的 5 小时 / 每周窗口，未推算金额。";
-      section.append(heading, items, fallbackNote);
-      container.append(section);
-    }
-  } else {
-    const empty = document.createElement("p");
-    empty.className = "hint";
-    empty.textContent = result ? "暂无额度窗口或模型额度数据。" : "尚无成功查询结果；额度数据未知。";
-    container.append(empty);
-  }
+  });
   $("agy-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
   renderProviderErrors($("agy-error"), cache, [result?.summaryError]);
 }
@@ -218,23 +315,29 @@ function renderTrend(field, chartId, summaryId) {
       unpriced += item.unpricedRecords;
     }
   }
-  const values = slots.map(({ bucket }) => counts.get(bucket));
+  const bucketValues = slots.map(({ bucket }) => counts.get(bucket));
+  const cumulative = $("chart-view").value === "cumulative";
+  let runningTotal = 0;
+  const values = cumulative ? bucketValues.map((value) => (runningTotal += value)) : bucketValues;
   const peak = Math.max(0, ...values);
-  const total = values.reduce((sum, value) => sum + value, 0);
+  const total = bucketValues.reduce((sum, value) => sum + value, 0);
   const label = selected ? `${selected[0]} / ${selected[1]}` : "全部模型";
   const isCost = field === "estimatedCostUsd";
   const format = isCost ? money : (value) => value.toLocaleString();
   const unit = isCost ? "（USD，估算）" : " tokens";
-  $(summaryId).textContent = `${period === "days" ? "最近 30 天" : "最近 24 小时"} · ${label} · ${format(total)}${unit}${isCost ? ` · ${priced} 条已计价${unpriced ? `，${unpriced} 条未计价未纳入金额` : ""}` : ""}${latest.usage.stale ? "（账本汇总已过期）" : ""}`;
+  $(summaryId).textContent = `${period === "days" ? "最近 30 天" : "最近 24 小时"} · ${label} · ${cumulative ? "时段累计" : "分时消耗"} · ${format(total)}${unit}${isCost ? ` · ${priced} 条已计价${unpriced ? `，${unpriced} 条未计价未纳入金额` : ""}` : ""}${latest.usage.stale ? "（账本汇总已过期）" : ""}`;
   const chart = $(chartId);
-  chart.setAttribute("aria-label", `${label}在${period === "days" ? "最近30天" : "最近24小时"}的${isCost ? "估算金额" : "Token"}消耗趋势，总计 ${format(total)}${unit}${isCost && unpriced ? `，${unpriced} 条未计价` : ""}`);
+  chart.dataset.view = cumulative ? "cumulative" : "interval";
+  chart.setAttribute("aria-label", `${label}在${period === "days" ? "最近30天" : "最近24小时"}的${isCost ? "估算金额" : "Token"}${cumulative ? "时段累计" : "分时"}消耗趋势，总计 ${format(total)}${unit}${isCost && unpriced ? `，${unpriced} 条未计价` : ""}`);
   chart.replaceChildren();
-  const svg = svgElement("svg", { viewBox: "0 0 1000 290", role: "presentation", "aria-hidden": "true" });
-  const left = 76, right = 972, top = 20, bottom = 245;
+  const width = Math.max(260, chart.clientWidth || 520);
+  const svg = svgElement("svg", { viewBox: `0 0 ${width} 210`, role: "presentation", "aria-hidden": "true" });
+  const left = 58, right = width - 12, top = 16, bottom = 175;
+  const axisFormat = (value) => isCost ? money(value) : new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
   for (let tick = 0; tick <= 2; tick++) {
     const y = bottom - tick * (bottom - top) / 2;
     svg.append(svgElement("line", { x1: left, x2: right, y1: y, y2: y, class: "grid-line" }));
-    svg.append(svgElement("text", { x: left - 13, y: y + 5, class: "axis-label", "text-anchor": "end" }, format(isCost ? peak * tick / 2 : Math.round(peak * tick / 2))));
+    svg.append(svgElement("text", { x: left - 9, y: y + 4, class: "axis-label", "text-anchor": "end" }, axisFormat(isCost ? peak * tick / 2 : Math.round(peak * tick / 2))));
   }
   const points = values.map((value, index) => {
     const x = left + index * (right - left) / (values.length - 1);
@@ -246,17 +349,22 @@ function renderTrend(field, chartId, summaryId) {
   svg.append(svgElement("path", { d: line, class: "chart-line" }));
   for (let index = 0; index < slots.length; index++) {
     const { x, y, value } = points[index];
-    const circle = svgElement("circle", { cx: x, cy: y, r: 3.5, class: "chart-point" });
-    circle.append(svgElement("title", {}, `${slots[index].label}: ${format(value)}${unit}`));
+    const circle = svgElement("circle", { cx: x, cy: y, r: value ? 3 : 0, class: "chart-point" });
+    circle.append(svgElement("title", {}, `${slots[index].label}${cumulative ? " 截至此刻时段累计" : " 分时消耗"}: ${format(value)}${unit}`));
     svg.append(circle);
-    if (index === 0 || index === slots.length - 1 || index % (period === "days" ? 7 : 6) === 0) {
-      svg.append(svgElement("text", { x, y: 279, class: "axis-label", "text-anchor": index === 0 ? "start" : index === slots.length - 1 ? "end" : "middle" }, slots[index].label));
+    const tickStep = width < 380 ? (period === "days" ? 14 : 12) : (period === "days" ? 7 : 6);
+    if (index === 0 || index === slots.length - 1 || (index % tickStep === 0 && index < slots.length - 3)) {
+      svg.append(svgElement("text", { x, y: 201, class: "axis-label", "text-anchor": index === 0 ? "start" : index === slots.length - 1 ? "end" : "middle" }, slots[index].label));
     }
   }
   chart.append(svg);
-  if (!total) notice(chart, isCost && unpriced ? "所选时段有未计价记录，无法计算这些记录的金额。" : `所选时间与模型暂无${isCost ? "可计价金额" : " Token 记录"}。`);
+  if (!total) notice(chart, isCost && unpriced ? "所选时段有未计价记录，无法计算这些记录的金额。" : `所选时间与模型暂无${isCost ? "可计价金额" : " Token 记录"}。`, !unpriced);
 }
 function renderChart() {
+  const cumulative = $("chart-view").value === "cumulative";
+  $("token-trend-title").textContent = cumulative ? "Token 累计消耗" : "Token 消耗";
+  $("cost-trend-title").textContent = cumulative ? "累计估算金额" : "估算金额";
+  $("chart-view-note").textContent = cumulative ? " · 累计从所选时段起点计算，非全部历史用量；未计价金额不纳入累计" : "";
   renderTrend("totalTokens", "chart", "chart-summary");
   renderTrend("estimatedCostUsd", "cost-chart", "cost-chart-summary");
 }
@@ -378,6 +486,10 @@ function render() {
     : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录"}${usage.stale ? " · 账本汇总已过期" : ""}`;
   const context = latest.context;
   $("overview-context").textContent = typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : "—";
+  const contextKnown = typeof context?.percent === "number" && Number.isFinite(context.percent);
+  $("context-meter").hidden = !contextKnown;
+  $("context-meter").value = contextKnown ? Math.max(0, Math.min(100, context.percent)) : 0;
+  $("context-meter").dataset.level = context?.percent >= 90 ? "low" : context?.percent >= 75 ? "warning" : "normal";
   $("overview-context-detail").textContent = context ? `${context.tokens === null ? "未知" : Number(context.tokens).toLocaleString()} / ${Number(context.contextWindow).toLocaleString()} tokens` : "当前模型未提供上下文窗口";
   const columns = [["Input", "input"], ["Output", "output"], ["Reasoning", "reasoning"], ["Cache read", "cacheRead"], ["Cache write", "cacheWrite"], ["Total tokens", "totalTokens"]];
   const tokens = $("tokens");
@@ -385,11 +497,7 @@ function render() {
   if (usage.stale) notice(tokens, usage.error || "Token 汇总已过期，显示上次有效结果");
   if (usage.invalidRecords) notice(tokens, `已跳过 ${usage.invalidRecords.toLocaleString()} 条损坏记录。`);
   if (pricing.unpricedRecords) notice(tokens, `${pricing.unpricedRecords.toLocaleString()} 条用量没有可靠价格，估算费用未覆盖这些记录。`);
-  if (!usage.records) notice(tokens, "暂无本插件记录的 Token 用量。");
-  const total = document.createElement("div");
-  total.className = "token-total";
-  total.textContent = Number(usage.totals.totalTokens).toLocaleString();
-  tokens.append(total);
+  if (!usage.records) notice(tokens, "暂无本插件记录的 Token 用量。", true);
   const metrics = document.createElement("div");
   metrics.className = "metrics";
   for (const [label, key] of columns) {
@@ -415,6 +523,7 @@ function render() {
   if (usage.models.length) {
     const table = document.createElement("table");
     const caption = document.createElement("caption");
+    caption.className = "sr-only";
     caption.textContent = "按 Provider 和模型分组，Total tokens 降序";
     table.append(caption);
     const head = document.createElement("thead");
@@ -444,12 +553,51 @@ function render() {
     models.textContent = "暂无模型明细";
   }
   renderPriceTable(pricing);
+  renderPortSettings();
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
   if (!busy) {
     $("show-oai").checked = latest.config.showOaiInStatusbar;
     $("show-agy").checked = latest.config.showAgyInStatusbar;
   }
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
+}
+function renderPortSettings() {
+  if (!latest) return;
+  const configured = latest.config.dashboardPort;
+  const running = latest.dashboard?.port ?? Number(location.port);
+  if (!portDirty && document.activeElement !== $("dashboard-port")) $("dashboard-port").value = String(configured);
+  $("port-state").textContent = `当前监听：127.0.0.1:${running} · 已保存端口：${configured}${running === configured ? "（正在使用）" : "（下次启动控制台生效）"}`;
+  const fallbackFrom = latest.dashboard?.fallbackFrom;
+  $("port-fallback").hidden = !fallbackFrom || configured !== fallbackFrom;
+  $("port-fallback-message").textContent = fallbackFrom ? `启动端口 ${fallbackFrom} 被占用，已自动改用 ${running}。请在设置中保存可用端口；原配置未更改。` : "";
+}
+async function portAction(save) {
+  if (busy || !control || !$("dashboard-port").reportValidity()) return;
+  const port = Number($("dashboard-port").value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return;
+  setBusy(true);
+  const feedback = $("port-feedback");
+  feedback.dataset.error = "false";
+  feedback.textContent = save ? "正在检测并保存端口…" : "正在检测端口占用…";
+  try {
+    const response = await fetch(save ? "/api/port" : "/api/port-check", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Quota-Control": control }, body: JSON.stringify({ port }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "端口操作失败");
+    if (save) {
+      latest.config.dashboardPort = port;
+      portDirty = false;
+      renderPortSettings();
+      feedback.textContent = `已保存端口 ${port}，下次启动控制台生效，当前页面地址不变。`;
+    } else {
+      feedback.dataset.error = String(!result.available);
+      feedback.textContent = result.message;
+    }
+  } catch (error) {
+    feedback.dataset.error = "true";
+    feedback.textContent = error.message || "端口操作失败";
+  } finally { setBusy(false); }
 }
 async function load() {
   const requested = selectedAccount;
@@ -461,7 +609,14 @@ async function load() {
   latest = state;
   selectedAccount = state.selectedAccountId;
   render();
-  $("feedback").textContent = "";
+  $("connection-status").dataset.state = "connected";
+  $("connection-status").textContent = "本地已连接";
+  if (!busy) $("feedback").textContent = "";
+}
+function loadError(error) {
+  $("connection-status").dataset.state = "offline";
+  $("connection-status").textContent = "连接已断开";
+  $("feedback").textContent = error.message || "无法连接本地 Pi 会话";
 }
 function syncStatusbarControls() {
   if (!latest) return;
@@ -472,7 +627,8 @@ function setBusy(value) {
   busy = value;
   for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy", "account-add", "account-history",
     "account-name", "account-import-name", "account-import-path", "backup-location", "backup-directory", "backup-restore-path",
-    "account-backup-create", "account-restore-path"]) $(id).disabled = value;
+    "account-backup-create", "account-restore-path", "dashboard-port", "port-check", "port-submit", "port-use-current"]) $(id).disabled = value;
+  $("refresh").textContent = value ? "处理中…" : "↻ 刷新额度";
   $("account-use").disabled = value || !(latest?.profiles?.length);
   $("account-switch-confirm").disabled = value || !(latest?.profiles?.length);
   $("account-manage").disabled = value || !(latest?.profiles?.length);
@@ -516,6 +672,48 @@ async function queueAccountCommand(command, args = "", feedbackId = "account-fee
     $(feedbackId).textContent = error.message || "操作失败";
   } finally { setBusy(false); }
 }
+// Hoverable, keyboard-accessible help; click pins it for touch users, Escape dismisses it.
+for (const tip of document.querySelectorAll(".help-tip")) {
+  const button = tip.querySelector("button");
+  const content = tip.querySelector('[role="tooltip"]');
+  let pinned = false;
+  let hovered = false;
+  const show = (visible) => {
+    content.hidden = !visible;
+    button.setAttribute("aria-expanded", String(visible));
+    content.classList.remove("help-tooltip-above");
+    if (visible && content.getBoundingClientRect().bottom > window.innerHeight - 16 && button.getBoundingClientRect().top > content.offsetHeight + 16) {
+      content.classList.add("help-tooltip-above");
+    }
+  };
+  tip.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "touch") return;
+    hovered = true;
+    show(true);
+  });
+  tip.addEventListener("pointerleave", () => {
+    hovered = false;
+    if (!pinned && document.activeElement !== button) show(false);
+  });
+  button.addEventListener("focus", () => show(true));
+  button.addEventListener("blur", () => { pinned = false; if (!hovered) show(false); });
+  button.addEventListener("click", () => { pinned = !pinned; show(pinned); });
+  document.addEventListener("click", (event) => { if (!tip.contains(event.target)) { pinned = false; show(false); } });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { pinned = false; show(false); } });
+}
+$("port-open-settings").addEventListener("click", () => {
+  $("settings").open = true;
+  $("settings").scrollIntoView({ block: "start" });
+  $("dashboard-port").focus({ preventScroll: true });
+});
+$("port-use-current").addEventListener("click", () => {
+  $("dashboard-port").value = String(latest?.dashboard?.port ?? Number(location.port));
+  portDirty = true;
+  $("port-feedback").textContent = "已填入当前端口，点击「保存端口」后用于下次启动。";
+});
+$("dashboard-port").addEventListener("input", () => { portDirty = true; $("port-feedback").textContent = ""; });
+$("port-check").addEventListener("click", () => { void portAction(false); });
+$("port-form").addEventListener("submit", (event) => { event.preventDefault(); void portAction(true); });
 const profileName = (value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
 $("account-use").addEventListener("click", () => { $("account-switch-dialog").showModal(); });
 $("account-add").addEventListener("click", () => { $("account-add-dialog").showModal(); });
@@ -581,8 +779,14 @@ $("account-restore-path").addEventListener("click", () => {
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
 $("usage-account").addEventListener("change", (event) => {
   selectedAccount = event.currentTarget.value;
-  void load().catch((error) => { $("feedback").textContent = error.message; });
+  void load().catch(loadError);
 });
+$("quota-view").addEventListener("change", (event) => {
+  const view = event.currentTarget.value;
+  $("provider-grid").dataset.quotaView = view;
+  $("quota-pie-legend").hidden = view !== "pie";
+});
+$("chart-view").addEventListener("change", renderChart);
 $("chart-period").addEventListener("change", renderChart);
 $("chart-model").addEventListener("change", renderChart);
 $("interval-form").addEventListener("submit", (event) => {
@@ -597,6 +801,14 @@ $("show-oai").addEventListener("change", (event) => {
 $("show-agy").addEventListener("change", (event) => {
   void action("/api/statusbar", { showAgyInStatusbar: event.currentTarget.checked });
 });
-void load().catch((error) => { $("feedback").textContent = error.message; });
-setInterval(() => { void load().catch((error) => { $("feedback").textContent = error.message; }); }, 5000);
+if (typeof ResizeObserver !== "undefined") {
+  let chartWidth;
+  new ResizeObserver(([entry]) => {
+    if (entry.contentRect.width === chartWidth) return;
+    chartWidth = entry.contentRect.width;
+    renderChart();
+  }).observe($("chart"));
+}
+void load().catch(loadError);
+setInterval(() => { if (!busy) void load().catch(loadError); }, 5000);
 setInterval(renderCountdown, 1000);

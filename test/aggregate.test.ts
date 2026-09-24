@@ -107,14 +107,33 @@ it("aggregates priced and unpriced provider costs within exact quota-period boun
   const aggregator = new UsageAggregator(dir);
   await aggregator.refresh();
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp + 1)).toEqual({
-    estimatedCostUsd: 4, pricedRecords: 1, unpricedRecords: 1, unpricedTokens: 10,
+    totalTokens: 1_000_010, estimatedCostUsd: 4, pricedRecords: 1, unpricedRecords: 1, unpricedTokens: 10,
   });
   expect(aggregator.estimateCostForPeriod("antigravity", timestamp - 1, timestamp + 1)).toEqual({
-    estimatedCostUsd: 0.3, pricedRecords: 1, unpricedRecords: 0, unpricedTokens: 0,
+    totalTokens: 1_000_000, estimatedCostUsd: 0.3, pricedRecords: 1, unpricedRecords: 0, unpricedTokens: 0,
   });
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp, timestamp + 1).pricedRecords).toBe(1);
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp + 1, timestamp + 2).pricedRecords).toBe(0);
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp).pricedRecords).toBe(0);
+});
+
+it("retains recorded amounts and filters exact-timestamp observations by model pool", async () => {
+  const dir = await fixture();
+  const timestamp = Date.now() - 60_000;
+  const usageDay = localDate(timestamp);
+  const records = [
+    { ...entry(usageDay, "antigravity", "gemini-2.5-flash"), timestamp, estimatedCostUsd: 3, pricingAsOf: "old-price" },
+    { ...entry(usageDay, "antigravity", "claude-sonnet-5"), timestamp, estimatedCostUsd: 7, pricingAsOf: "old-price" },
+  ];
+  await writeFile(join(dir, `usage-${usageDay}.jsonl`), records.map(line).join(""));
+  const view = new UsageAggregator(dir);
+  await view.refresh();
+  expect(view.state().pricing.estimatedCostUsd).toBe(10);
+  expect(view.estimateCostForPeriod("antigravity", timestamp, timestamp + 1, (model) => model.startsWith("gemini-")))
+    .toMatchObject({ totalTokens: 17, estimatedCostUsd: 3, pricedRecords: 1 });
+  const restarted = new UsageAggregator(dir);
+  await restarted.refresh();
+  expect(restarted.state().pricing.estimatedCostUsd).toBe(10);
 });
 
 it("holds incomplete lines, skips damaged records, and processes external appends exactly once", async () => {

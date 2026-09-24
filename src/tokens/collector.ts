@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
+import { estimateRecordCost, PRICE_DATE } from "./pricing.js";
 
 export function emptyTotals(): TokenTotals {
   return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
@@ -20,7 +21,7 @@ export function tokenRecord(message: AssistantMessage): TokenUsageRecord | undef
   const usage = message.usage;
   if (!usage || ![usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.totalTokens].every(Number.isFinite)) return undefined;
   // Reasoning is a subset of output; never add it again to totalTokens.
-  return {
+  const record: TokenUsageRecord = {
     timestamp: message.timestamp,
     provider: message.provider,
     model: message.model,
@@ -31,4 +32,6 @@ export function tokenRecord(message: AssistantMessage): TokenUsageRecord | undef
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.totalTokens,
   };
+  const cost = estimateRecordCost(record);
+  return { ...record, pricingAsOf: PRICE_DATE, ...(cost !== undefined ? { estimatedCostUsd: cost } : {}) };
 }

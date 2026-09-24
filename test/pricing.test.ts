@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { estimateRecordCost, PRICE_DATE, PRICE_TABLE } from "../src/tokens/pricing.js";
 import type { TokenUsageRecord } from "../src/types.js";
+import { tokenRecord } from "../src/tokens/collector.js";
 
 const record = (provider: string, model: string, extra: Partial<TokenUsageRecord> = {}): TokenUsageRecord => ({
   timestamp: Date.now(), provider, model, input: 1_000_000, output: 100_000,
@@ -25,6 +26,17 @@ it("uses exact provider/model matching, Gemini high-context rates, and conservat
   expect(estimateRecordCost(record("openai-codex", "unknown"))).toBeUndefined();
   expect(estimateRecordCost(record("openai-codex", "gpt-5.4", { cacheWrite: 1 }))).toBeUndefined();
   expect(estimateRecordCost(record("antigravity", "gemini-3-flash-preview", { cacheWrite: 1 }))).toBeUndefined();
+});
+
+it("freezes the collected cost and never re-prices a recorded amount or an explicitly unpriced record", () => {
+  const usage = record("openai-codex", "gpt-6-sol");
+  const saved = tokenRecord({ role: "assistant", provider: usage.provider, model: usage.model, api: "openai-codex-responses",
+    timestamp: usage.timestamp, content: [], stopReason: "stop", usage: { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  expect(saved).toMatchObject({ pricingAsOf: PRICE_DATE, estimatedCostUsd: estimateRecordCost(usage) });
+  expect(estimateRecordCost({ ...usage, estimatedCostUsd: 17, pricingAsOf: "older-price" })).toBe(17);
+  expect(estimateRecordCost({ ...usage, estimatedCostUsd: 0, pricingAsOf: "older-price" })).toBe(0);
+  expect(estimateRecordCost({ ...usage, pricingAsOf: "older-price" })).toBeUndefined();
+  expect(estimateRecordCost({ ...usage, estimatedCostUsd: -1 })).toBeUndefined();
 });
 
 it("publishes a dated, official-source price catalogue", () => {

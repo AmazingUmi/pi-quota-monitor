@@ -16,7 +16,7 @@ const state: DashboardState = {
   records: 1, invalidRecords: 0, updatedAt: Date.now(), stale: false },
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
   quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
-  config: { refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
+  config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
     showOaiInStatusbar: true, showAgyInStatusbar: true },
   updatedAt: Date.now(),
 };
@@ -25,9 +25,9 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const refresh = vi.fn(async () => {});
   const setInterval = vi.fn(async (seconds: number) => { state.config.refreshIntervalSeconds = seconds; });
   const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showAgyInStatusbar">>) => { Object.assign(state.config, settings); });
-  const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval, setStatusbar });
+  const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval, setStatusbar, setPort: async () => {} });
   running.push(dashboard);
-  const origin = await dashboard.start();
+  const origin = await dashboard.start(0);
   expect(await dashboard.start()).toBe(origin);
   expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 
@@ -42,11 +42,15 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("chart-model");
   expect(html).toContain("usage-account");
   expect([...html.matchAll(/<section class="section /g)]).toHaveLength(4);
-  expect([...html.matchAll(/<h2 id="[^"]+">([^<]+)/g)].map((match) => match[1]))
-    .toEqual(["控制管理", "概览", "剩余额度", "用量"]);
+  expect([...html.matchAll(/<h2 id="[^"]+"[^>]*>([^<]+)/g)].map((match) => match[1]))
+    .toEqual(["控制管理", "账本概览", "剩余额度", "用量分析"]);
+  expect(html).toContain('class="skip-link"');
+  expect(html).toContain('aria-label="页面导航"');
+  expect(html).toContain('id="connection-status"');
+  expect(html).toContain('id="context-meter"');
   expect(html).toContain("关于数据");
   expect(html).toContain("状态与设置");
-  expect(html).toContain("当前周期可计价用量的公开 API 标价");
+  expect(html).toContain("两次已保存读数之间的 Token 时间戳匹配账本金额");
   expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
   expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
   for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
@@ -62,8 +66,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(controls).toContain('id="account-current"');
   expect(html.indexOf('id="usage-account"')).toBeLessThan(html.indexOf('id="overview-title"'));
   expect(html.indexOf('id="account-current"')).toBeLessThan(html.indexOf('id="overview-title"'));
-  expect(html.indexOf('id="account-backup"')).toBeLessThan(html.indexOf('id="tokens"'));
-  expect(html.indexOf('id="account-reset-usage"')).toBeLessThan(html.indexOf('id="tokens"'));
+  // Dialogs live outside the main data flow instead of adding clutter to the usage section.
+  expect(html.indexOf('id="account-switch-dialog"')).toBeGreaterThan(html.indexOf('</main>'));
   expect(html).toContain('<option value="all">总体用量</option>');
   expect(html).not.toContain("未归属历史");
   expect(html).not.toContain('id="account-reset-cache"');
@@ -71,12 +75,12 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).not.toContain("Cost");
   const css = await (await fetch(`${origin}/style.css`)).text();
   expect(css).toContain("prefers-color-scheme: dark");
-  expect(css).toContain("#245bce");
+  expect(css).toContain("prefers-reduced-motion: reduce");
+  expect(css).toContain("forced-colors: active");
   expect(css).toContain(".chart-line");
-  expect(css).toContain(".control-section { --section-accent:");
-  expect(css).toContain(".overview-section { --section-accent:");
-  expect(css).toContain(".usage-section { --section-accent:");
-  expect(css).toContain(".quota-section { --section-accent:");
+  expect(css).toContain(".quota-meter");
+  expect(css).toContain(".trend-grid");
+  expect(css).toContain(":focus-visible");
   expect(css).toContain(".quota-money");
   const js = await fetch(`${origin}/client.js`);
   expect(js.status).toBe(200);
@@ -107,7 +111,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(JSON.stringify(payload)).not.toContain("/usage-");
   expect(JSON.stringify(payload)).not.toContain("/secret/");
   expect(JSON.stringify(payload)).not.toContain("credential");
-  expect(Object.keys(payload.config)).toEqual(["refreshIntervalSeconds", "showOaiInStatusbar", "showAgyInStatusbar"]);
+  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showAgyInStatusbar"]);
   expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showAgyInStatusbar: true });
   expect(Object.keys(payload.usage)).toEqual(["totals", "models", "pricing", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
@@ -147,10 +151,10 @@ it("queues only allowlisted account commands behind the dashboard control check"
   const accountCommand = vi.fn(async (_command: string, _args: string) => {});
   const dashboard = new QuotaDashboard({
     state: async () => ({ ...state, profiles: [{ name: "pro", accountId: "pro-id" }], backups: ["/private/backup.json"] }),
-    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, accountCommand,
+    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, setPort: async () => {}, accountCommand,
   });
   running.push(dashboard);
-  const origin = await dashboard.start();
+  const origin = await dashboard.start(0);
   const payload = await (await fetch(`${origin}/api/state`)).json() as DashboardState & { control: string };
   expect(payload.profiles).toEqual([{ name: "pro", accountId: "pro-id" }]);
   expect(payload.backups).toEqual(["/private/backup.json"]);
@@ -183,10 +187,10 @@ it("labels the all-accounts view and hides active Codex quota in other ledger vi
         ? { ...state.quotaEstimates, codex: { fiveHour: { note: "此额度窗口暂无数据" }, weekly: { note: "此额度窗口暂无数据" } } }
         : state.quotaEstimates,
     }),
-    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {},
+    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, setPort: async () => {},
   });
   running.push(dashboard);
-  const origin = await dashboard.start();
+  const origin = await dashboard.start(0);
   const payload = await (await fetch(`${origin}/api/state?account=account%3Aplus`)).json() as DashboardState;
   expect(payload.selectedAccountId).toBe("account:plus");
   expect(payload.currentAccountId).toBe("account:pro");

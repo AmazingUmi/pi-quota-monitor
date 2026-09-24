@@ -233,7 +233,7 @@ it("persists statusbar settings in config and reloads them", async () => {
   process.env.PI_CODING_AGENT_DIR = directory;
   try {
     expect(await loadConfig()).toEqual(DEFAULT_CONFIG);
-    const changed = { ...DEFAULT_CONFIG, showOaiInStatusbar: false, showAgyInStatusbar: true };
+    const changed = { ...DEFAULT_CONFIG, dashboardPort: 39876, showOaiInStatusbar: false, showAgyInStatusbar: true };
     await saveConfig(changed);
     expect(JSON.parse(await readFile(configPath(), "utf8"))).toEqual(changed);
     expect(await loadConfig()).toEqual(changed);

@@ -60,6 +60,9 @@ function priceFor(provider: string, model: string): PriceRow | undefined {
 
 /** No speculative fallback for unknown IDs, unsupported cache-write rates or modalities. */
 export function estimateRecordCost(record: TokenUsageRecord): number | undefined {
+  // New ledger entries retain their recorded amount even when the catalog later changes.
+  if (record.estimatedCostUsd !== undefined) return Number.isFinite(record.estimatedCostUsd) && record.estimatedCostUsd >= 0 ? record.estimatedCostUsd : undefined;
+  if (record.pricingAsOf !== undefined) return undefined; // Known unpriced at collection time.
   const price = priceFor(record.provider, record.model);
   if (!price) return undefined;
   const prompt = record.input + record.cacheRead + record.cacheWrite;

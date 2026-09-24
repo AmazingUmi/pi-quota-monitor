@@ -2,16 +2,18 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "./accounts.js";
 import { backupHistory, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
-import { QuotaDashboard } from "./dashboard.js";
+import type { QuotaDashboard } from "./dashboard.js";
+import { attachDashboard, detachDashboard } from "./resident-dashboard.js";
+import { QuotaReadings } from "./quota-readings.js";
 import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
 import { RefreshScheduler } from "./scheduler.js";
 import { formatDetails, formatStatus } from "./statusline.js";
 import { UsageAggregator } from "./tokens/aggregate.js";
 import { accumulate, emptyTotals, tokenRecord } from "./tokens/collector.js";
-import { antigravityWindowDuration, estimateQuotaAmount, FIVE_HOURS_MS, ONE_WEEK_MS } from "./quota-estimate.js";
+import { quotaAmountEstimates } from "./quota-estimate.js";
 import { appendUsage, localDate, readDailyUsage } from "./tokens/store.js";
-import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
+import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
 
 const STATUS_KEY = "pi-quota-monitor";
 type ProviderId = "openai-codex" | "antigravity";
@@ -50,7 +52,7 @@ function safeAccountFailure(error: unknown): string {
 }
 
 function contextMetrics(ctx: ExtensionContext): { tokens: number | null; contextWindow: number; percent: number | null } | null {
-  const usage = ctx.getContextUsage();
+  const usage = ctx.getContextUsage?.();
   return usage && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
     ? { contextWindow: usage.contextWindow,
       tokens: usage.tokens !== null && Number.isFinite(usage.tokens) ? usage.tokens : null,
@@ -66,34 +68,13 @@ function branchTotals(ctx: ExtensionContext): TokenTotals {
   }, emptyTotals());
 }
 
-function quotaAmountEstimates(
-  aggregator: UsageAggregator,
-  codex: ProviderCache<CodexQuota>,
-  antigravity: ProviderCache<AntigravityQuota>,
-): QuotaAmountEstimates {
-  const now = Date.now();
-  const ledgerStale = aggregator.state().stale;
-  const estimate = (provider: string, window: Parameters<typeof estimateQuotaAmount>[0], durationMs: number | undefined) =>
-    estimateQuotaAmount(window, durationMs,
-      (startAt, endAt) => aggregator.estimateCostForPeriod(provider, startAt, endAt), now, ledgerStale);
-  return {
-    codex: {
-      fiveHour: estimate("openai-codex", codex.value?.fiveHour,
-        (codex.value?.fiveHour?.windowMinutes ?? FIVE_HOURS_MS / 60_000) * 60_000),
-      weekly: estimate("openai-codex", codex.value?.weekly,
-        (codex.value?.weekly?.windowMinutes ?? ONE_WEEK_MS / 60_000) * 60_000),
-    },
-    antigravity: { groups: (antigravity.value?.groups ?? []).map((group) => ({
-      name: group.name,
-      windows: group.windows.map((window) => {
-        const durationMs = antigravityWindowDuration(window.label);
-        return durationMs === undefined ? null : estimate("antigravity", window, durationMs);
-      }),
-    })) },
-  };
-}
-
 export default function quotaMonitor(pi: ExtensionAPI): void {
+  const dashboardOwner = {};
+  let codexHistory: CodexQuota[] = [];
+  let agyHistory: AntigravityQuota[] = [];
+  const agyReadings = new QuotaReadings("antigravity");
+  let readingsQueue: Promise<void> = Promise.resolve();
+  let codexRestore: Promise<void> = Promise.resolve();
   let active = false;
   let generation = 0;
   let config: MonitorConfig = { ...DEFAULT_CONFIG };
@@ -130,6 +111,22 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     }
   }
 
+  async function restoreCodex(account: string | undefined, epoch: number): Promise<void> {
+    const readings = account ? await new QuotaReadings("codex", account).load() : [];
+    if (!live(epoch) || codexAccountId !== account || activeAccountId() !== account) return;
+    codexHistory = readings;
+    if (!codex.value && readings.length) { codex.value = readings.at(-1); codex.restored = true; }
+  }
+
+  function persistReading(write: () => Promise<void>, cache: ProviderCache<unknown>, epoch: number): Promise<void> {
+    cache.storageError = undefined;
+    const value = cache.value;
+    readingsQueue = readingsQueue.then(write).catch(() => {
+      if (live(epoch) && cache.value === value) cache.storageError = "读数保存失败；当前显示内存读数。";
+    });
+    return readingsQueue;
+  }
+
   function refresh(provider: ProviderId, ctx: ExtensionContext, force = false): Promise<void> {
     if (!active) return Promise.resolve();
     const account = provider === "openai-codex" ? activeAccountId() : undefined;
@@ -137,16 +134,13 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       codexAccountId = account;
       dailyDate = "";
       void updateDailyDate(generation);
-      if (dashboard) {
-        void dashboard.stop().catch(() => {});
-        dashboard = undefined;
-        accountAggregators.forEach((view) => view.stop());
-        accountAggregators = [];
-        if (ctx.hasUI) ctx.ui.notify("Codex 账号已改变，请重新运行 /quota-console。", "warning");
-      }
       codex.value = undefined;
       codex.error = undefined;
+      codex.restored = false;
+      codex.storageError = undefined;
       codex.lastAttemptAt = undefined;
+      codexHistory = [];
+      codexRestore = restoreCodex(account, generation);
       render(ctx);
     }
     if (inFlight[provider]) return inFlight[provider];
@@ -159,6 +153,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     const promise = (async () => {
       try {
         if (provider === "openai-codex") {
+          await codexRestore;
+          if (!live(epoch) || activeAccountId() !== account) return;
           const configured = ctx.modelRegistry.getProvider(provider);
           const baseUrl = configured?.baseUrl ?? configured?.getModels()[0]?.baseUrl;
           if (!baseUrl || new URL(baseUrl).origin !== "https://chatgpt.com") {
@@ -171,6 +167,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!live(epoch) || activeAccountId() !== account) return;
           codex.value = result;
           codex.error = undefined;
+          codex.restored = false;
+          codexHistory = [...codexHistory.filter((q) => q.capturedAt > Date.now() - 8 * 86_400_000), result];
+          if (account) await persistReading(() => new QuotaReadings("codex", account).append(result), codex, epoch);
         } else {
           const localAgy = ctx.modelRegistry.getProvider(provider)?.baseUrl?.startsWith("agy://") ?? false;
           // Local agy uses a sentinel API key, not an OAuth credential. Its own
@@ -186,6 +185,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!live(epoch)) return;
           antigravity.value = result;
           antigravity.error = undefined;
+          antigravity.restored = false;
+          agyHistory = [...agyHistory.filter((q) => q.capturedAt > Date.now() - 8 * 86_400_000), result];
+          await persistReading(() => agyReadings.append(result), antigravity, epoch);
         }
       } catch (error) {
         if (!live(epoch) || (provider === "openai-codex" && activeAccountId() !== account)) return;
@@ -220,6 +222,14 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (currentContext) render(currentContext);
   }
 
+  async function setDashboardPort(port: number, epoch: number): Promise<void> {
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    const next = { ...config, dashboardPort: port };
+    await saveConfig(next);
+    if (!live(epoch)) throw new Error("Session is no longer active.");
+    config = next; // The running dashboard keeps its existing socket until the next launch.
+  }
+
   async function setStatusbarSettings(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>, epoch: number): Promise<void> {
     if (!live(epoch)) throw new Error("Session is no longer active.");
     const next = { ...config, ...settings };
@@ -241,6 +251,12 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    abortController?.abort();
+    scheduler?.stop();
+    await detachDashboard(dashboardOwner, false);
+    dashboard = undefined;
+    accountAggregators.forEach((view) => view.stop());
+    accountAggregators = [];
     const epoch = ++generation;
     active = true;
     abortController = new AbortController();
@@ -258,6 +274,16 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     antigravity.value = undefined;
     antigravity.error = undefined;
     antigravity.lastAttemptAt = undefined;
+    codex.restored = antigravity.restored = false;
+    codex.storageError = antigravity.storageError = undefined;
+    await readingsQueue;
+    codexRestore = restoreCodex(codexAccountId, epoch);
+    const restoredAgy = await agyReadings.load();
+    await codexRestore;
+    if (!live(epoch)) return;
+    agyHistory = restoredAgy;
+    antigravity.value = agyHistory.at(-1);
+    antigravity.restored = !!antigravity.value;
     sessionTotals = branchTotals(ctx);
     await ledgerQueue;
     if (!live(epoch)) return;
@@ -273,7 +299,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       render(currentContext); // update reset countdown
     });
     scheduler.start();
-    // Do not block startup on remote providers.
+    // Start the process-owned console with cached readings; never wait for remote providers.
+    await handleQuotaCommand("console", ctx, false);
     void refreshAll(ctx);
   });
 
@@ -327,13 +354,14 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     }
   });
 
-  const handleQuotaCommand = async (args: string, ctx: ExtensionContext): Promise<void> => {
+  const handleQuotaCommand = async (args: string, ctx: ExtensionContext, announce = true): Promise<void> => {
     if (!active) return;
     const epoch = generation;
     const command = args.trim();
     // Native /login and external auth changes must invalidate the previous account's quota before display.
     void refresh("openai-codex", ctx);
     if (command === "console") {
+      try {
       if (!dashboard) {
         const views = new Map<string, UsageAggregator>();
         let syncingViews: Promise<{ accounts: Array<{ id: string; name: string }>; currentId?: string; currentProfile?: string; profiles: Array<{ name: string; accountId: string }> }> | undefined;
@@ -363,13 +391,14 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
               views.set(item.id, view);
               accountAggregators.push(view);
             }
+            if (!live(epoch)) throw new Error("Session is no longer active.");
             return { accounts, currentId, currentProfile: listed.current, profiles: listed.profiles };
           })().finally(() => { syncingViews = undefined; });
           return syncingViews;
         };
         try { await ensureViews(); }
         catch { accountAggregators.forEach((view) => view.stop()); accountAggregators = []; throw new Error("Unable to load account usage."); }
-        dashboard = new QuotaDashboard({
+        dashboard = await attachDashboard(dashboardOwner, {
           state: async (requested) => {
             const { accounts, currentId, currentProfile, profiles } = await ensureViews();
             const defaultId = currentId ? `account:${currentId}` : "all";
@@ -379,10 +408,14 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             // quota. Show/estimate it only when the viewed accountId is active.
             const showingCurrent = currentId !== undefined && selected === `account:${currentId}`;
             const visibleCodex = showingCurrent && codexAccountId === currentId ? codex : {};
-            return { accounts, currentProfile, profiles, backups: await listBackups(), accountNotice, selectedAccountId: selected,
+            await ledgerQueue;
+            if ((view.state().updatedAt ?? 0) < Math.max(visibleCodex.value?.capturedAt ?? 0, antigravity.value?.capturedAt ?? 0)) await view.refresh();
+            const backups = await listBackups();
+            if (!live(epoch)) throw new Error("Session is no longer active.");
+            return { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId: selected,
               currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
               antigravity, usage: view.state(), context: currentContext ? contextMetrics(currentContext) : null,
-              quotaEstimates: quotaAmountEstimates(view, visibleCodex, antigravity), config, updatedAt: Date.now() };
+              quotaEstimates: quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory), config, updatedAt: Date.now() };
           },
           accountCommand: async (command, args) => {
             if (!live(epoch)) throw new Error("Session is no longer active.");
@@ -399,23 +432,30 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             await updateDailyDate(epoch);
           },
           setInterval: (seconds) => setIntervalSeconds(seconds, epoch),
+          setPort: (port) => setDashboardPort(port, epoch),
           setStatusbar: (settings) => setStatusbarSettings(settings, epoch),
-        });
+        }, config.dashboardPort);
       }
-      try {
-        const url = await dashboard.start();
+        const openingDashboard = dashboard;
+        const url = await openingDashboard.start(config.dashboardPort);
         if (!live(epoch)) return;
         render(ctx); // Keep this extension's RPC statusbar entry visible according to its settings.
-        const message = `额度控制台：${url}（仅本机访问；本会话结束后关闭）`;
-        if (ctx.hasUI) ctx.ui.notify(message, "info");
-        else console.log(message);
-      } catch {
+        const notice = openingDashboard.startupNotice;
+        const message = `额度控制台：${url}（仅本机访问；Pi 进程内常驻，不随对话切换关闭）${notice ? `\n${notice}` : ""}`;
+        if (announce || notice) {
+          if (ctx.hasUI) ctx.ui.notify(message, notice ? "warning" : "info");
+          else console.log(message);
+        }
+      } catch (error) {
         if (!live(epoch)) return;
         dashboard = undefined;
         accountAggregators.forEach((view) => view.stop());
         accountAggregators = [];
         render(ctx);
-        ctx.ui.notify("无法启动本地额度控制台。", "error");
+        const reason = error instanceof Error ? error.message : "未知错误";
+        const message = `无法启动本地额度控制台：${reason} 可修改 pi-quota-monitor/config.json 中的 dashboardPort 后重新加载插件。`;
+        if (ctx.hasUI) ctx.ui.notify(message, "error");
+        else console.error(message);
       }
       return;
     }
@@ -511,7 +551,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           await Promise.all(accountAggregators.map((view) => view.refresh()));
           notify(`已导入 ${restored.profiles} 个账号、${restored.records} 条记录。`);
         } else if (action === "reset" && label === "cache" && !extra) {
-          codex.value = undefined;
           codex.lastAttemptAt = undefined;
           if (active) await refresh("openai-codex", ctx, true);
           notify("当前 Codex 额度缓存已清除并重新查询。");
@@ -573,7 +612,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     abortController = undefined;
     scheduler?.stop();
     scheduler = undefined;
-    const closingDashboard = dashboard;
     dashboard = undefined;
     accountAggregators.forEach((view) => view.stop());
     accountAggregators = [];
@@ -583,6 +621,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     try { if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined); }
     catch { /* A closing UI must not prevent ledger flushing. */ }
     // Pi awaits shutdown handlers; flush the last assistant's ledger write before exit or session replacement.
-    await Promise.allSettled([ledgerQueue, closingDashboard?.stop()]);
+    await Promise.allSettled([ledgerQueue, readingsQueue,
+      detachDashboard(dashboardOwner, !_event.reason || _event.reason === "quit")]);
   });
 }

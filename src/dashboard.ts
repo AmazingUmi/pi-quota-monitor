@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { isAbsolute } from "node:path";
 import type { UsageSummary } from "./tokens/aggregate.js";
 import { PRICE_TABLE } from "./tokens/pricing.js";
+import { checkDashboardPort, DASHBOARD_HOST as HOST, DEFAULT_DASHBOARD_PORT, isDashboardPort, portErrorMessage } from "./dashboard-port.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 export interface DashboardState {
@@ -29,10 +30,10 @@ export interface DashboardActions {
   accountCommand?(command: string, args: string): Promise<void>;
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
+  setPort(port: number): Promise<void>;
   setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>): Promise<void>;
 }
 
-const HOST = "127.0.0.1";
 function publicTotals(totals: TokenTotals): TokenTotals {
   const { input, output, reasoning, cacheRead, cacheWrite, totalTokens } = totals;
   return { input, output, reasoning, cacheRead, cacheWrite, totalTokens };
@@ -66,25 +67,43 @@ async function readSmallJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-/** Local-only, session-scoped HTTP server. It never receives or returns provider credentials. */
+function listenOn(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => { server.off("listening", onListening); reject(error); };
+    const onListening = () => { server.off("error", onError); resolve(); };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen({ port, host: HOST, exclusive: true });
+  });
+}
+
+/** Local-only HTTP server. Its resident owner controls lifetime; no provider credentials are exposed. */
 export class QuotaDashboard {
   private server?: Server;
   private starting?: Promise<string>;
   private origin?: string;
+  private fallbackFrom?: number;
   private closed = false;
   private readonly nonce = randomBytes(24).toString("hex");
 
   constructor(private readonly actions: DashboardActions) {}
 
-  start(): Promise<string> {
+  get startupNotice(): string | undefined {
+    if (!this.origin || this.fallbackFrom === undefined) return undefined;
+    return `端口 ${this.fallbackFrom} 已被占用，已自动改用 ${new URL(this.origin).port}。请在控制台「状态与设置」中保存可用端口；原配置未更改。`;
+  }
+
+  start(port = DEFAULT_DASHBOARD_PORT): Promise<string> {
     if (this.closed) return Promise.reject(new Error("Dashboard was closed."));
     if (this.origin) return Promise.resolve(this.origin);
     if (this.starting) return this.starting;
-    this.starting = this.listen().finally(() => { this.starting = undefined; });
+    // Port 0 is reserved for internal tests; persisted user settings require a fixed port.
+    if (port !== 0 && !isDashboardPort(port)) return Promise.reject(new Error("端口须为 1024–65535 的整数。"));
+    this.starting = this.listen(port).finally(() => { this.starting = undefined; });
     return this.starting;
   }
 
-  private async listen(): Promise<string> {
+  private async listen(requestedPort: number): Promise<string> {
     const [html, script, style] = await Promise.all([
       readFile(new URL("./dashboard/index.html", import.meta.url)),
       readFile(new URL("./dashboard/client.js", import.meta.url)),
@@ -99,10 +118,18 @@ export class QuotaDashboard {
     });
     this.server = server;
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, HOST, () => { server.off("error", reject); resolve(); });
-      });
+      try {
+        await listenOn(server, requestedPort);
+      } catch (error) {
+        if (this.closed) throw new Error("Dashboard was closed.");
+        if (requestedPort === 0 || (error as NodeJS.ErrnoException).code !== "EADDRINUSE") {
+          throw new Error(portErrorMessage(requestedPort, error));
+        }
+        // Let the OS atomically select and bind a free port; do not overwrite the user's preference.
+        try { await listenOn(server, 0); }
+        catch (fallbackError) { throw new Error(portErrorMessage(0, fallbackError)); }
+        this.fallbackFrom = requestedPort;
+      }
       if (this.closed) { server.closeAllConnections(); server.close(); throw new Error("Dashboard was closed."); }
       const port = (server.address() as AddressInfo).port;
       this.origin = `http://${HOST}:${port}`;
@@ -124,7 +151,7 @@ export class QuotaDashboard {
       reply(res, 403, JSON.stringify({ error: "Forbidden" }));
       return;
     }
-    // Origin, host and a session-local nonce protect write endpoints from cross-site requests.
+    // Origin, host and a server-local nonce protect write endpoints from cross-site requests.
     const pathname = new URL(req.url ?? "/", origin).pathname;
     if (req.method === "GET") {
       if (pathname === "/") {
@@ -158,7 +185,8 @@ export class QuotaDashboard {
         reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
           quotaEstimates,
-          config: { refreshIntervalSeconds: config.refreshIntervalSeconds,
+          dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
+          config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
             showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
@@ -200,6 +228,21 @@ export class QuotaDashboard {
         return;
       }
       await this.actions.setInterval(seconds);
+    } else if (pathname === "/api/port" || pathname === "/api/port-check") {
+      let body: unknown;
+      try { body = await readSmallJson(req); }
+      catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
+      const port = body && typeof body === "object" && !Array.isArray(body) && "port" in body ? body.port : undefined;
+      if (!isDashboardPort(port)) {
+        reply(res, 400, JSON.stringify({ error: "端口须为 1024–65535 的整数。" })); return;
+      }
+      const check = await checkDashboardPort(port, Number(new URL(origin).port));
+      if (pathname === "/api/port-check") {
+        reply(res, 200, JSON.stringify(check)); return;
+      }
+      if (!check.available) { reply(res, 409, JSON.stringify({ error: check.message })); return; }
+      try { await this.actions.setPort(port); }
+      catch { reply(res, 500, JSON.stringify({ error: "无法保存端口设置，原设置未更改。" })); return; }
     } else if (pathname === "/api/statusbar") {
       let body: unknown;
       try { body = await readSmallJson(req); }

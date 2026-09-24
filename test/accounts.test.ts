@@ -5,9 +5,15 @@ import { join } from "node:path";
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "../src/accounts.js";
 import { backupHistory, importHistory, resetAccountUsage } from "../src/history.js";
 import { UsageAggregator } from "../src/tokens/aggregate.js";
+import { QuotaReadings } from "../src/quota-readings.js";
 import { localDate, readDailyUsage } from "../src/tokens/store.js";
 import quotaMonitor from "../src/index.js";
 import { createAgentSession, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+vi.mock("../src/config.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/config.js")>();
+  return { ...original, loadConfig: async () => ({ ...original.DEFAULT_CONFIG, dashboardPort: 0 }) };
+});
 
 const oldDir = process.env.PI_CODING_AGENT_DIR;
 const oldOffline = process.env.PI_OFFLINE;
@@ -206,7 +212,7 @@ it("discards an in-flight quota result from the previous account and re-queries 
   const statuses: string[] = [];
   const ctx = {
     hasUI: true, mode: "tui", model: { provider: "openai-codex" },
-    ui: { setStatus: (_key: string, status?: string) => { if (status) statuses.push(status); } },
+    ui: { setStatus: (_key: string, status?: string) => { if (status) statuses.push(status); }, notify: vi.fn() },
     sessionManager: { getBranch: () => [] },
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }),
       getProviderAuth: async () => ({ auth: { apiKey: `token-${activeAccountId()}` } }), getApiKeyForProvider: async () => undefined },
@@ -303,6 +309,9 @@ it("keeps quota amount estimates bound to the active account when viewing totals
   await importAccount("plus", plusPath);
   await writeFile(join(dir, "pi-quota-monitor", `usage-${localDate(Date.now())}.jsonl`),
     [record("pro-id"), record("plus-id"), record("plus-id"), record()].map((item) => JSON.stringify(item) + "\n").join(""));
+  await new QuotaReadings("codex", "pro-id", join(dir, "pi-quota-monitor")).append({
+    capturedAt: Date.now() - 60_000, plan: "pro", weekly: { label: "weekly", remainingPercent: 60, resetAt: Math.ceil((Date.now() + 86_400_000) / 1000) * 1000 },
+  });
   const originalFetch = globalThis.fetch;
   const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => String(input).startsWith("https://chatgpt.com/")
     ? Promise.resolve(new Response(JSON.stringify({ plan_type: "pro", rate_limit: {

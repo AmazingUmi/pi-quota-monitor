@@ -30,6 +30,8 @@ export interface UsageSummary {
 interface PeriodCost {
   timestamp: number;
   provider: string;
+  model: string;
+  totalTokens: number;
   estimatedCostUsd: number;
   pricedRecords: number;
   unpricedRecords: number;
@@ -37,6 +39,7 @@ interface PeriodCost {
 }
 
 export interface PeriodCostSummary {
+  totalTokens: number;
   estimatedCostUsd: number;
   pricedRecords: number;
   unpricedRecords: number;
@@ -82,11 +85,12 @@ export class UsageAggregator {
 
   state(): UsageSummary { return this.summary; }
 
-  estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now()): PeriodCostSummary {
-    const result = { estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
+  estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now(), modelFilter?: (model: string) => boolean): PeriodCostSummary {
+    const result = { totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
     for (const state of this.files.values()) {
       for (const item of state.periodCosts.values()) {
-        if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt) continue;
+        if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt || (modelFilter && !modelFilter(item.model))) continue;
+        result.totalTokens += item.totalTokens;
         result.estimatedCostUsd += item.estimatedCostUsd;
         result.pricedRecords += item.pricedRecords;
         result.unpricedRecords += item.unpricedRecords;
@@ -238,11 +242,13 @@ export class UsageAggregator {
           const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
           const cost = estimateRecordCost(value);
           if (value.timestamp >= Date.now() - PERIOD_COST_RETENTION_MS) {
-            const costKey = JSON.stringify([value.timestamp, value.provider]);
+            const costKey = JSON.stringify([value.timestamp, value.provider, value.model]);
             const periodCost = state.periodCosts.get(costKey);
             state.periodCosts.set(costKey, {
               timestamp: value.timestamp,
               provider: value.provider,
+              model: value.model,
+              totalTokens: (periodCost?.totalTokens ?? 0) + value.totalTokens,
               estimatedCostUsd: (periodCost?.estimatedCostUsd ?? 0) + (cost ?? 0),
               pricedRecords: (periodCost?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),
               unpricedRecords: (periodCost?.unpricedRecords ?? 0) + (cost === undefined ? 1 : 0),

@@ -1,39 +1,69 @@
 import { expect, it, vi } from "vitest";
-import { antigravityWindowDuration, estimateQuotaAmount, FIVE_HOURS_MS, ONE_WEEK_MS } from "../src/quota-estimate.js";
+import { antigravityWindowDuration, estimateQuotaAmount, FIVE_HOURS_MS, ONE_WEEK_MS, quotaAmountEstimates, type WindowReading } from "../src/quota-estimate.js";
+import type { UsageAggregator } from "../src/tokens/aggregate.js";
 
-const emptyCost = { estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
+const now = Date.parse("2026-09-23T12:00:00Z");
+const resetAt = now + 2 * 3_600_000;
+const cost = { totalTokens: 1000, estimatedCostUsd: 8, pricedRecords: 4, unpricedRecords: 0, unpricedTokens: 0 };
+const sample = (capturedAt: number, remainingPercent: number, reset = resetAt): WindowReading => ({ capturedAt, window: { label: "5h", remainingPercent, resetAt: reset } });
 
-it("infers period and remaining amounts from priced period usage and provider usage percentage", () => {
-  const now = Date.parse("2026-09-23T12:00:00Z");
-  const resetAt = now + 2 * 60 * 60 * 1000;
-  const costForPeriod = vi.fn(() => ({ estimatedCostUsd: 8, pricedRecords: 4, unpricedRecords: 1, unpricedTokens: 100 }));
-  const result = estimateQuotaAmount({ label: "5h", remainingPercent: 60, resetAt }, FIVE_HOURS_MS, costForPeriod, now, true);
-  expect(costForPeriod).toHaveBeenCalledWith(resetAt - FIVE_HOURS_MS, now);
-  expect(result).toMatchObject({
-    observedCostUsd: 8, usedPercent: 40, estimatedPeriodUsd: 20, estimatedRemainingUsd: 12,
-    unpricedRecords: 1, ledgerStale: true,
-  });
-  expect(result.note).toContain("金额可能偏低");
-  expect(result.note).toContain("账本汇总已过期");
+it("uses only observed percentage-point changes and costs within the recorded timestamps", () => {
+  const from = now - 3600_000;
+  const end = now - 60_000;
+  const costForPeriod = vi.fn(() => cost);
+  const result = estimateQuotaAmount([sample(from, 70), sample(end, 60)], FIVE_HOURS_MS, costForPeriod, now);
+  expect(costForPeriod).toHaveBeenCalledExactlyOnceWith(from, end);
+  expect(result).toMatchObject({ observedCostUsd: 8, observedTokens: 1000, usedPercent: 10,
+    estimatedPeriodUsd: 80, estimatedRemainingUsd: 48, sampleStartAt: from, sampleEndAt: end });
+  // The old algorithm would divide by all 40% consumed, including time before installation.
+  expect(result.estimatedPeriodUsd).not.toBe(20);
 });
 
-it("recognizes Antigravity 5-hour and weekly buckets but does not invent other periods", () => {
+it("recognizes supported Antigravity windows without inventing other periods", () => {
   expect(antigravityWindowDuration("Five Hour Limit Remaining")).toBe(FIVE_HOURS_MS);
   expect(antigravityWindowDuration("5-hour limit remaining")).toBe(FIVE_HOURS_MS);
   expect(antigravityWindowDuration("Weekly Limit Remaining")).toBe(ONE_WEEK_MS);
   expect(antigravityWindowDuration("Daily requests")).toBeUndefined();
 });
 
-it("does not estimate a missing window, missing reset, expired period, or unobserved cost", () => {
-  const now = 100_000;
-  expect(estimateQuotaAmount(undefined, FIVE_HOURS_MS, () => emptyCost, now).estimatedPeriodUsd).toBeUndefined();
-  expect(estimateQuotaAmount({ label: "5h", remainingPercent: 50 }, FIVE_HOURS_MS, () => emptyCost, now).note)
-    .toContain("缺少本周期重置时间");
-  expect(estimateQuotaAmount({ label: "5h", remainingPercent: 50, resetAt: now }, FIVE_HOURS_MS, () => emptyCost, now).note)
-    .toContain("已到重置时间");
-  expect(estimateQuotaAmount({ label: "5h", remainingPercent: 100, resetAt: now + 10_000 }, FIVE_HOURS_MS, () => emptyCost, now).note)
-    .toContain("没有可计价的账本用量");
-  expect(estimateQuotaAmount({ label: "5h", remainingPercent: 100, resetAt: now + 10_000 }, FIVE_HOURS_MS,
-    () => ({ estimatedCostUsd: 0, pricedRecords: 1, unpricedRecords: 0, unpricedTokens: 0 }), now).note)
-    .toContain("尚未报告");
+it("does not extrapolate from one reading, zero change, expired/missing windows or incomplete costs", () => {
+  const readings = [sample(now - 3600_000, 70), sample(now, 60)];
+  const estimate = (rows = readings, summary = cost, stale = false) => estimateQuotaAmount(rows, FIVE_HOURS_MS, () => summary, now, stale);
+  expect(estimate([]).estimatedPeriodUsd).toBeUndefined();
+  expect(estimate([readings[1]]).note).toContain("第二次");
+  expect(estimate([sample(now - 3600_000, 60), readings[1]]).note).toContain("尚未下降");
+  expect(estimate([{ capturedAt: now, window: { label: "5h", remainingPercent: 60 } }]).note).toContain("重置时间");
+  expect(estimate([sample(now, 60, now)]).note).toContain("已到重置时间");
+  expect(estimate(readings, { ...cost, estimatedCostUsd: 0 }).estimatedPeriodUsd).toBeUndefined();
+  expect(estimate(readings, { ...cost, unpricedRecords: 1 }).note).toContain("未计价");
+  expect(estimate(readings, cost, true).note).toContain("已过期");
+});
+
+it("never crosses a reset or quota increase and accepts small reset timestamp rounding", () => {
+  const estimate = (readings: WindowReading[]) => estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now);
+  expect(estimate([sample(now - 3600_000, 70, resetAt - FIVE_HOURS_MS), sample(now, 60)]).estimatedPeriodUsd).toBeUndefined();
+  expect(estimate([sample(now - 3600_000, 50), sample(now, 60)]).estimatedPeriodUsd).toBeUndefined();
+  const result = estimate([sample(now - 7200_000, 40), sample(now - 3600_000, 70), sample(now, 60, resetAt + 1000)]);
+  expect(result.sampleStartAt).toBe(now - 3600_000);
+  expect(result.estimatedRemainingUsd).toBe(48);
+});
+
+it("filters Antigravity calibration by model pool and does not borrow Codex history when hidden", () => {
+  const time = Date.now();
+  const start = time - 3600_000;
+  const quota = (capturedAt: number, remainingPercent: number) => ({ capturedAt, groups: [
+    { name: "Gemini", windows: [{ label: "5h", remainingPercent, resetAt: time + 3600_000 }] },
+    { name: "Claude/GPT", windows: [{ label: "5h", remainingPercent, resetAt: time + 3600_000 }] },
+  ], models: [] });
+  const estimateCostForPeriod = vi.fn(() => cost);
+  const aggregator = { state: () => ({ stale: false }), estimateCostForPeriod } as unknown as UsageAggregator;
+  const result = quotaAmountEstimates(aggregator, {}, { value: quota(time, 60) }, [], [quota(start, 70)]);
+  expect(result.codex.fiveHour.estimatedPeriodUsd).toBeUndefined();
+  expect(estimateCostForPeriod).toHaveBeenCalledTimes(2);
+  const calls = estimateCostForPeriod.mock.calls as unknown as Array<[string, number, number, (model: string) => boolean]>;
+  expect(calls[0].slice(0, 3)).toEqual(["antigravity", start, time]);
+  expect(calls[0][3]("gemini-2.5-flash")).toBe(true);
+  expect(calls[0][3]("claude-sonnet-5")).toBe(false);
+  expect(calls[1][3]("claude-sonnet-5")).toBe(true);
+  expect(calls[1][3]("gemini-2.5-flash")).toBe(false);
 });

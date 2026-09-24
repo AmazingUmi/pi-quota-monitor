@@ -1,12 +1,32 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CodexQuota, AntigravityQuota } from "../src/types.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { saveConfig } from "../src/config.js";
+import { createServer, type AddressInfo } from "node:net";
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config.js";
 import quotaMonitor from "../src/index.js";
 import { appendUsage } from "../src/tokens/store.js";
 
+const stored = vi.hoisted(() => ({ root: "", account: "test-account", data: new Map<string, Array<CodexQuota | AntigravityQuota>>(), saved: vi.fn() }));
+vi.mock("../src/quota-readings.js", () => ({ QuotaReadings: class {
+  constructor(private provider: string, private account?: string) {}
+  async load() { return stored.data.get(`${this.provider}:${this.account ?? "shared"}`) ?? []; }
+  async append(value: CodexQuota | AntigravityQuota) {
+    stored.saved(this.provider, this.account, value);
+    const key = `${this.provider}:${this.account ?? "shared"}`;
+    stored.data.set(key, [...(stored.data.get(key) ?? []), value]);
+  }
+} }));
+vi.mock("../src/accounts.js", () => ({
+  activeAccountId: () => stored.account,
+  listAccounts: async () => ({ current: stored.account, profiles: [{ name: stored.account, accountId: stored.account }] }),
+  deleteAccount: vi.fn(), importAccount: vi.fn(), saveAccount: vi.fn(), useAccount: vi.fn(),
+}));
 vi.mock("../src/config.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/config.js")>();
-  return { ...original, loadConfig: vi.fn(async () => ({ ...original.DEFAULT_CONFIG })), saveConfig: vi.fn(async () => {}) };
+  return { ...original, configDirectory: () => stored.root, loadConfig: vi.fn(async () => ({ ...original.DEFAULT_CONFIG, dashboardPort: 0 })), saveConfig: vi.fn(async () => {}) };
 });
 vi.mock("../src/tokens/store.js", () => ({
   localDate: () => "2026-06-01", readDailyUsage: vi.fn(async () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 })), appendUsage: vi.fn(async () => {}),
@@ -24,8 +44,16 @@ vi.mock("../src/providers/antigravity.js", () => ({
   ], models: [] })),
 }));
 
-const cleanup: Array<() => void> = [];
-afterEach(() => { for (const stop of cleanup.splice(0)) stop(); });
+const cleanup: Array<() => unknown> = [];
+beforeEach(async () => {
+  stored.root = await mkdtemp(join(tmpdir(), "quota-lifecycle-"));
+  stored.account = "test-account";
+  stored.data.clear(); stored.saved.mockClear();
+});
+afterEach(async () => {
+  for (const stop of cleanup.splice(0)) await stop();
+  await rm(stored.root, { recursive: true, force: true });
+});
 
 it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at shutdown", async () => {
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
@@ -46,7 +74,7 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
     },
   } as unknown as ExtensionContext;
   const fire = async (name: string, event = {}) => handlers.get(name)?.(event, ctx);
-  cleanup.push(() => { void fire("session_shutdown"); });
+  cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
   expect(statuses[0]).toContain("OAI -/- | AGY -/-");
   await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | AGY 84%/67%"));
@@ -114,7 +142,7 @@ it("queries the local agy provider natively without treating its sentinel as OAu
     },
   } as unknown as ExtensionContext;
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
-  cleanup.push(() => { void fire("session_shutdown"); });
+  cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
   await vi.waitFor(() => expect(statuses.at(-1)).toContain("AGY 84%/67%"));
   expect(queryNativeAntigravityQuota).toHaveBeenCalledOnce();
@@ -142,7 +170,7 @@ it("keeps selected RPC status visible in the console and applies settings withou
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => ({ auth: { apiKey: "test" } }), getApiKeyForProvider: async () => JSON.stringify({ token: "test", projectId: "test" }) },
   } as unknown as ExtensionContext;
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
-  cleanup.push(() => { void fire("session_shutdown"); });
+  cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
   expect([...commands.keys()]).toEqual([
     "quota-account-list", "quota-account-current", "quota-account-save", "quota-account-import", "quota-account-use", "quota-account-delete",
@@ -165,6 +193,13 @@ it("keeps selected RPC status visible in the console and applies settings withou
   expect(payload).not.toHaveProperty("daily");
   const control = payload.control as string;
   const headers = { Origin: url!, "X-Quota-Control": control, "Content-Type": "application/json" };
+  const runningPort = Number(new URL(url!).port);
+  const portSaved = await fetch(`${url}/api/port`, { method: "POST", headers, body: JSON.stringify({ port: runningPort }) });
+  expect(portSaved.status).toBe(200);
+  expect(vi.mocked(saveConfig)).toHaveBeenLastCalledWith(expect.objectContaining({ dashboardPort: runningPort }));
+  const portState = await (await fetch(`${url}/api/state`)).json();
+  expect(portState.config.dashboardPort).toBe(runningPort);
+  expect(portState.dashboard.port).toBe(runningPort);
   const queued = await fetch(`${url}/api/account-command`, { method: "POST", headers, body: JSON.stringify({ command: "use", args: "pro" }) });
   expect(queued.status).toBe(200);
   expect(sendUserMessage).toHaveBeenCalledWith("/quota-account-use pro", { expandPromptTemplates: true });
@@ -186,7 +221,7 @@ it("keeps selected RPC status visible in the console and applies settings withou
   expect(notices.at(-1)).toContain("Codex");
   expect(statuses.at(-1)?.text).toBe("↑0 ↓0");
   await commands.get("quota-interval")?.("240", ctx);
-  expect(vi.mocked(saveConfig)).toHaveBeenLastCalledWith(expect.objectContaining({ refreshIntervalSeconds: 240 }));
+  expect(vi.mocked(saveConfig)).toHaveBeenLastCalledWith(expect.objectContaining({ refreshIntervalSeconds: 240, dashboardPort: runningPort }));
 
   const tuiContext = { ...ctx, mode: "tui" } as unknown as ExtensionContext;
   await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, tuiContext);
@@ -202,6 +237,112 @@ it("keeps selected RPC status visible in the console and applies settings withou
   await fire("session_shutdown");
   cleanup.pop();
   await vi.waitFor(async () => { await expect(fetch(`${url}/api/state`)).rejects.toThrow(); });
+});
+
+it("notifies Pi about a port fallback with the real URL and a settings prompt", async () => {
+  const occupied = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve));
+  const port = (occupied.address() as AddressInfo).port;
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+  const notify = vi.fn();
+  const ctx = {
+    hasUI: true, ui: { setStatus: vi.fn(), notify }, sessionManager: { getBranch: () => [] }, getContextUsage: () => undefined,
+    modelRegistry: { getProvider: () => undefined, getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
+  } as unknown as ExtensionContext;
+  vi.mocked(loadConfig).mockResolvedValueOnce({ ...DEFAULT_CONFIG, dashboardPort: port });
+  quotaMonitor({
+    on: (name: string, handler: (event: any, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commands.set(name, options.handler); },
+  } as unknown as ExtensionAPI);
+  try {
+    await handlers.get("session_start")?.({}, ctx);
+    await commands.get("quota-console")?.("", ctx);
+    expect(notify).toHaveBeenLastCalledWith(expect.stringContaining(`端口 ${port} 已被占用`), "warning");
+    const message = notify.mock.calls.at(-1)![0] as string;
+    expect(message).toContain("状态与设置");
+    const url = message.match(/http:\/\/127\.0\.0\.1:\d+/)![0];
+    expect(Number(new URL(url).port)).not.toBe(port);
+    const state = await (await fetch(`${url}/api/state`)).json();
+    expect(state.config.dashboardPort).toBe(port);
+    expect(state.dashboard.fallbackFrom).toBe(port);
+  } finally {
+    await handlers.get("session_shutdown")?.({}, ctx);
+    await new Promise<void>((resolve) => occupied.close(() => resolve()));
+  }
+});
+
+it.each(["new", "resume", "fork", "reload"])("keeps the same socket and control token across %s runtime replacement", async (reason) => {
+  const create = () => {
+    const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+    const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+    const notify = vi.fn();
+    const ctx = { hasUI: true, ui: { setStatus: vi.fn(), notify }, sessionManager: { getBranch: () => [] },
+      getContextUsage: () => undefined,
+      modelRegistry: { getProvider: () => undefined, getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
+    } as unknown as ExtensionContext;
+    quotaMonitor({ on: (name: string, handler: (event: any, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
+      registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => commands.set(name, options.handler),
+    } as unknown as ExtensionAPI);
+    return { handlers, commands, notify, ctx };
+  };
+  const first = create();
+  await first.handlers.get("session_start")?.({ reason: "startup" }, first.ctx);
+  await first.commands.get("quota-console")?.("", first.ctx);
+  const url = first.notify.mock.calls.at(-1)![0].match(/http:\/\/127\.0\.0\.1:\d+/)![0];
+  const before = await (await fetch(`${url}/api/state`)).json();
+  await first.handlers.get("session_shutdown")?.({ reason }, first.ctx);
+  const between = await (await fetch(`${url}/api/state`)).json();
+  expect(between.control).toBe(before.control);
+  expect(between.context).toBeNull();
+  expect(between.accountNotice.message).toContain("控制台保持运行");
+  const unavailable = await fetch(`${url}/api/interval`, { method: "POST", headers: { Origin: url, "X-Quota-Control": before.control }, body: JSON.stringify({ seconds: 240 }) });
+  expect(unavailable.status).toBe(500); // No mutation through an invalidated session context.
+  const next = create(); // Pi creates a fresh extension factory after replacement.
+  cleanup.push(() => next.handlers.get("session_shutdown")?.({ reason: "quit" }, next.ctx));
+  await next.handlers.get("session_start")?.({ reason }, next.ctx);
+  const after = await (await fetch(`${url}/api/state`)).json();
+  expect(after.control).toBe(before.control);
+  expect(after.dashboard.port).toBe(before.dashboard.port);
+  const response = await fetch(`${url}/api/interval`, { method: "POST", headers: { Origin: url, "X-Quota-Control": after.control }, body: JSON.stringify({ seconds: 240 }) });
+  expect(response.status).toBe(200); // Bound to the new generation, not a stale closure.
+});
+
+it("shows saved account-specific readings before remote queries finish and persists each success", async () => {
+  const capturedAt = Date.now() - 60_000;
+  stored.data.set("codex:test-account", [{ capturedAt, fiveHour: { label: "5h", remainingPercent: 42 } }]);
+  stored.data.set("antigravity:shared", [{ capturedAt, groups: [{ name: "Gemini", windows: [{ label: "5h", remainingPercent: 55 }] }], models: [] }]);
+  const { queryCodexQuota } = await import("../src/providers/codex.js");
+  let resolve!: (value: CodexQuota) => void;
+  vi.mocked(queryCodexQuota).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+  const notify = vi.fn();
+  const statuses: string[] = [];
+  const ctx = { hasUI: true, ui: { setStatus: (_key: string, text: string) => statuses.push(text), notify }, sessionManager: { getBranch: () => [] },
+    modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => ({ auth: { apiKey: "test" } }), getApiKeyForProvider: async () => undefined },
+  } as unknown as ExtensionContext;
+  quotaMonitor({ on: (name: string, handler: (event: any, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => commands.set(name, options.handler),
+  } as unknown as ExtensionAPI);
+  cleanup.push(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
+  await handlers.get("session_start")?.({}, ctx);
+  expect(statuses[0]).toContain("OAI 42%/- | AGY 55%/-");
+  await commands.get("quota-console")?.("", ctx);
+  const url = notify.mock.calls.at(-1)![0].match(/http:\/\/127\.0\.0\.1:\d+/)![0];
+  const cached = await (await fetch(`${url}/api/state`)).json();
+  expect(cached.codex).toMatchObject({ restored: true, value: { capturedAt, fiveHour: { remainingPercent: 42 } } });
+  const live = { capturedAt: Date.now(), fiveHour: { label: "5h", remainingPercent: 40 } };
+  resolve(live);
+  await vi.waitFor(() => expect(stored.saved).toHaveBeenCalledWith("codex", "test-account", live));
+  const current = await (await fetch(`${url}/api/state`)).json();
+  expect(current.codex.restored).toBe(false);
+  expect(current.codex.value.fiveHour.remainingPercent).toBe(40);
+  stored.account = "other-account";
+  await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, ctx);
+  const switched = await (await fetch(`${url}/api/state`)).json();
+  expect(switched.currentAccountId).toBe("account:other-account");
+  expect(switched.codex.value?.fiveHour.remainingPercent).not.toBe(40);
 });
 
 it("ignores a provider result that arrives after shutdown", async () => {
@@ -221,7 +362,7 @@ it("ignores a provider result that arrives after shutdown", async () => {
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }), getProviderAuth: async () => ({ auth: { apiKey: "test" } }), getApiKeyForProvider: async () => undefined },
   } as unknown as ExtensionContext;
   const fire = async (name: string) => handlers.get(name)?.({}, ctx);
-  cleanup.push(() => { void fire("session_shutdown"); });
+  cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
   await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
   await fire("session_shutdown");

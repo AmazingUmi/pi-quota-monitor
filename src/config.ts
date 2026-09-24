@@ -2,8 +2,10 @@ import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { MonitorConfig } from "./types.js";
+import { DEFAULT_DASHBOARD_PORT, isDashboardPort } from "./dashboard-port.js";
 
 export const DEFAULT_CONFIG: MonitorConfig = {
+  dashboardPort: DEFAULT_DASHBOARD_PORT,
   refreshIntervalSeconds: 180,
   staleAfterSeconds: 60,
   requestTimeoutSeconds: 10,
@@ -26,6 +28,7 @@ export function normalizeConfig(value: unknown): MonitorConfig {
   const stale = record.staleAfterSeconds;
   const timeout = record.requestTimeoutSeconds;
   return {
+    dashboardPort: isDashboardPort(record.dashboardPort) ? record.dashboardPort : DEFAULT_CONFIG.dashboardPort,
     refreshIntervalSeconds: typeof interval === "number" && Number.isInteger(interval) && interval >= 60 && interval <= 3600
       ? interval : DEFAULT_CONFIG.refreshIntervalSeconds,
     staleAfterSeconds: typeof stale === "number" && Number.isInteger(stale) && stale >= 30 && stale <= 600

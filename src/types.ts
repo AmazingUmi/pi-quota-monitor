@@ -46,17 +46,26 @@ export interface TokenUsageRecord extends TokenTotals {
   provider: string;
   model: string;
   accountId?: string;
+  /** Public API equivalent cost frozen when this record was collected, not subscription billing. */
+  estimatedCostUsd?: number;
+  pricingAsOf?: string;
 }
 
 export interface ProviderCache<T> {
   value?: T;
   lastAttemptAt?: number;
   error?: string;
+  storageError?: string;
+  restored?: boolean;
 }
 
 export interface QuotaAmountEstimate {
   note: string;
   observedCostUsd?: number;
+  observedTokens?: number;
+  sampleStartAt?: number;
+  sampleEndAt?: number;
+  /** Percentage-point drop between recorded observations, not the whole cycle's used percentage. */
   usedPercent?: number;
   estimatedPeriodUsd?: number;
   estimatedRemainingUsd?: number;
@@ -70,6 +79,7 @@ export interface QuotaAmountEstimates {
 }
 
 export interface MonitorConfig {
+  dashboardPort: number;
   refreshIntervalSeconds: number;
   staleAfterSeconds: number;
   requestTimeoutSeconds: number;
