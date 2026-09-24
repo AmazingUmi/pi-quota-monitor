@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile, rename, rm, chmod, lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import lockfile from "proper-lockfile";
-import { configDirectory } from "./config.js";
+import { configDirectory, usageDirectory } from "./config.js";
 import { accountId, credential, listAccounts } from "./accounts.js";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 function localDate(timestamp: number): string {
@@ -15,11 +15,53 @@ const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const backupDir = () => join(configDirectory(), "backups");
 const lockPath = () => join(configDirectory(), "ledger.guard");
 
+/** Move pre-usage/ ledgers under the same lock used by append, backup and reset. */
+async function migrateLegacyUsage(): Promise<void> {
+  const destination = usageDirectory();
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const directoryInfo = await lstat(destination);
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) throw new Error("Invalid usage directory.");
+  await chmod(destination, 0o700);
+  for (const entry of await readdir(configDirectory(), { withFileTypes: true })) {
+    if (!entry.isFile() || !LEDGER.test(entry.name)) continue;
+    const source = join(configDirectory(), entry.name);
+    const target = join(destination, entry.name);
+    let existing: string;
+    try {
+      const targetInfo = await lstat(target);
+      if (!targetInfo.isFile()) throw new Error("Invalid usage ledger.");
+      existing = await readFile(target, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await rename(source, target);
+      await chmod(target, 0o600);
+      continue;
+    }
+    const incoming = await readFile(source, "utf8");
+    // Never turn a trailing partial JSONL entry into a permanent malformed line.
+    if ((existing && !existing.endsWith("\n")) || (incoming && !incoming.endsWith("\n"))) {
+      throw new Error("Cannot merge incomplete usage ledgers; original files were preserved.");
+    }
+    const counts = new Map<string, number>();
+    for (const line of lines(existing)) counts.set(line, (counts.get(line) ?? 0) + 1);
+    const missing: string[] = [];
+    for (const line of lines(incoming)) {
+      const count = counts.get(line) ?? 0;
+      if (count) counts.set(line, count - 1);
+      else missing.push(line);
+    }
+    if (missing.length) await atomic(target, existing + missing.join("\n") + "\n");
+    await chmod(target, 0o600);
+    // If interrupted after writing the target, the occurrence-count merge is idempotent.
+    await rm(source);
+  }
+}
+
 export async function withLedgerLock<T>(fn: () => Promise<T>): Promise<T> {
   await mkdir(configDirectory(), { recursive: true, mode: 0o700 });
   await writeFile(lockPath(), "", { flag: "a", mode: 0o600 });
   const release = await lockfile.lock(lockPath(), { realpath: false, stale: 30_000, retries: { retries: 5 } });
-  try { return await fn(); } finally { await release(); }
+  try { await migrateLegacyUsage(); return await fn(); } finally { await release(); }
 }
 
 async function atomic(path: string, text: string): Promise<void> {
@@ -61,8 +103,8 @@ async function snapshot(): Promise<Snapshot> {
     accounts.push({ name: profile.name, credential });
   }
   const ledgers: Record<string, string> = {};
-  for (const entry of await readdir(configDirectory(), { withFileTypes: true })) {
-    if (entry.isFile() && LEDGER.test(entry.name)) ledgers[entry.name] = await readFile(join(configDirectory(), entry.name), "utf8");
+  for (const entry of await readdir(usageDirectory(), { withFileTypes: true })) {
+    if (entry.isFile() && LEDGER.test(entry.name)) ledgers[entry.name] = await readFile(join(usageDirectory(), entry.name), "utf8");
   }
   return { schema: 1, createdAt: new Date().toISOString(), profiles: accounts, ledgers };
 }
@@ -132,7 +174,7 @@ export async function importHistory(path: string): Promise<{ profiles: number; r
     const changes: Array<{ path: string; before: string | undefined; after: string }> = [];
     let records = 0;
     for (const [filename, content] of Object.entries(data.ledgers)) {
-      const dest = join(configDirectory(), filename);
+      const dest = join(usageDirectory(), filename);
       let previous: string | undefined;
       try { previous = await readFile(dest, "utf8"); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -176,9 +218,9 @@ export async function resetAccountUsage(id: string): Promise<{ backup: string; r
   return withLedgerLock(async () => {
     const changes: Array<{ path: string; before: string; after: string }> = [];
     let removed = 0;
-    for (const entry of await readdir(configDirectory(), { withFileTypes: true })) {
+    for (const entry of await readdir(usageDirectory(), { withFileTypes: true })) {
       if (!entry.isFile() || !LEDGER.test(entry.name)) continue;
-      const file = join(configDirectory(), entry.name);
+      const file = join(usageDirectory(), entry.name);
       const original = await readFile(file, "utf8");
       const rows = lines(original);
       if ((original && !original.endsWith("\n")) || rows.some((line) => !validLine(line, entry.name))) {

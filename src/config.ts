@@ -22,6 +22,10 @@ export function configPath(): string {
   return join(configDirectory(), "config.json");
 }
 
+export function usageDirectory(directory = configDirectory()): string {
+  return join(directory, "usage");
+}
+
 export function normalizeConfig(value: unknown): MonitorConfig {
   const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const interval = record.refreshIntervalSeconds;

@@ -44,7 +44,7 @@ pi install npm:pi-quota-monitor
 
 ### 数据与估算
 
-配置位于 `~/.pi/agent/pi-quota-monitor/config.json`（可用 `PI_CODING_AGENT_DIR` 更改 Pi 数据目录）。默认控制台端口为 `38457`，刷新间隔为 180 秒。Token 账本 `usage-YYYY-MM-DD.jsonl` 只记录**安装本插件后的消息**，不回填以前的 Pi 历史；记录 Token、模型、账号归属和估算金额，不记录提示词或凭据。Reasoning 已包含于 Output，不重复计数。
+配置位于 `~/.pi/agent/pi-quota-monitor/config.json`（可用 `PI_CODING_AGENT_DIR` 更改 Pi 数据目录）。默认控制台端口为 `38457`，刷新间隔为 180 秒。Token 账本位于 `pi-quota-monitor/usage/usage-YYYY-MM-DD.jsonl`；升级时会自动迁移旧目录中的同名文件。账本只记录**安装本插件后的消息**，不回填以前的 Pi 历史；记录 Token、模型、账号归属和估算金额，不记录提示词或凭据。Reasoning 已包含于 Output，不重复计数。
 
 金额按公开的标准 API 价格估算，**不是订阅实付、余额或预算**。价格表见 [`src/tokens/pricing.ts`](src/tokens/pricing.ts)（核对日期：2026-09-24）。[Google 官方价格](https://ai.google.dev/gemini-api/docs/pricing)中的 Gemini 3.8 Flash 每百万输入 / 输出 / 缓存读取 Token 为 $0.75 / $3.75 / $0.075，适用至 2026-12-31。已有金额的记录保持原值；此前未计价的 3.8 Flash 历史记录会在汇总时补估，原始账本不改写。未知模型、无法可靠计价的记录单独标示。非文本内容、缓存时长、折扣及价格变动可能造成偏差。
 
@@ -102,7 +102,7 @@ Other account commands: `/quota-account-current`, `/quota-account-delete <name>`
 
 ### Data and estimates
 
-Configuration is stored in `~/.pi/agent/pi-quota-monitor/config.json` (`PI_CODING_AGENT_DIR` can change Pi's data directory). The default dashboard port is `38457` and refresh interval is 180 seconds. The `usage-YYYY-MM-DD.jsonl` token ledger covers **messages recorded after installation only**, not older Pi history. It stores token counts, model, account attribution, and estimated cost—not prompts or credentials. Reasoning tokens are included in Output and are not counted twice.
+Configuration is stored in `~/.pi/agent/pi-quota-monitor/config.json` (`PI_CODING_AGENT_DIR` can change Pi's data directory). The default dashboard port is `38457` and refresh interval is 180 seconds. Token ledgers live at `pi-quota-monitor/usage/usage-YYYY-MM-DD.jsonl`; existing root-level ledgers are migrated on upgrade. They cover **messages recorded after installation only**, not older Pi history. It stores token counts, model, account attribution, and estimated cost—not prompts or credentials. Reasoning tokens are included in Output and are not counted twice.
 
 Costs estimate public standard API list prices, **not subscription charges, balances, or budgets**. See [`src/tokens/pricing.ts`](src/tokens/pricing.ts) (checked 2026-09-24). [Google's published price](https://ai.google.dev/gemini-api/docs/pricing) for Gemini 3.8 Flash is $0.75 / $3.75 / $0.075 per million input / output / cache-read tokens through 2026-12-31. Saved amounts remain unchanged. Previously unpriced 3.8 Flash records are estimated during aggregation without rewriting the ledger. Unknown or unsupported usage remains marked unpriced. Non-text usage, cache-storage duration, discounts, and historical price changes can affect accuracy.
 

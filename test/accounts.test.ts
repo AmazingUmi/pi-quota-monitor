@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { chmod, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "../src/accounts.js";
 import { backupHistory, importHistory, resetAccountUsage } from "../src/history.js";
 import { UsageAggregator } from "../src/tokens/aggregate.js";
 import { QuotaReadings } from "../src/quota-readings.js";
-import { localDate, readDailyUsage } from "../src/tokens/store.js";
+import { appendUsage, localDate, readDailyUsage } from "../src/tokens/store.js";
 import quotaMonitor from "../src/index.js";
 import { createAgentSession, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -111,13 +111,19 @@ it("makes a same-process Pi ModelRuntime pick up the switched OAuth credential",
 it("isolates Codex ledger and cost, leaves old entries unassigned, and restores reset data idempotently", async () => {
   const { dir } = await setup();
   await saveAccount("pro");
-  const ledger = join(dir, "pi-quota-monitor", `usage-${localDate(Date.now())}.jsonl`);
+  const root = join(dir, "pi-quota-monitor");
+  const name = `usage-${localDate(Date.now())}.jsonl`;
+  const oldLedger = join(root, name);
+  const ledger = join(root, "usage", name);
   const content = [record("pro-id"), record("plus-id"), record()].map((r) => JSON.stringify(r) + "\n").join("");
-  await writeFile(ledger, content, { mode: 0o600 });
-  const pro = new UsageAggregator(join(dir, "pi-quota-monitor"), "pro-id");
-  const plus = new UsageAggregator(join(dir, "pi-quota-monitor"), "plus-id");
-  const legacy = new UsageAggregator(join(dir, "pi-quota-monitor"), null);
-  await Promise.all([pro.refresh(), plus.refresh(), legacy.refresh()]);
+  await writeFile(oldLedger, content, { mode: 0o600 });
+  const pro = new UsageAggregator(join(root, "usage"), "pro-id");
+  const plus = new UsageAggregator(join(root, "usage"), "plus-id");
+  const legacy = new UsageAggregator(join(root, "usage"), null);
+  await pro.refresh(); // The first scan migrates the old root-level ledger.
+  await Promise.all([plus.refresh(), legacy.refresh()]);
+  await expect(readFile(oldLedger, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await stat(join(root, "usage"))).mode & 0o777).toBe(0o700);
   expect([pro.state().records, plus.state().records, legacy.state().records]).toEqual([1, 1, 1]);
   expect((await readDailyUsage(localDate(Date.now()), "pro-id")).totalTokens).toBe(110);
   expect((await readDailyUsage(localDate(Date.now()), "plus-id")).totalTokens).toBe(110);
@@ -136,6 +142,76 @@ it("isolates Codex ledger and cost, leaves old entries unassigned, and restores 
   await writeFile(corrupted, JSON.stringify({ schema: 1, profiles: [], ledgers: { "../auth.json": "{}" } }));
   await expect(importHistory(corrupted)).rejects.toThrow("Invalid backup ledger");
   expect((await readFile(ledger, "utf8")).split("\n").filter(Boolean)).toHaveLength(3);
+});
+
+it("merges colliding legacy and usage/ ledgers once, and keeps backup, reset and restore consistent", async () => {
+  const { dir } = await setup();
+  await saveAccount("pro");
+  const root = join(dir, "pi-quota-monitor");
+  const day = localDate(Date.now());
+  const name = `usage-${day}.jsonl`;
+  const legacyPath = join(root, name);
+  const usageDir = join(root, "usage");
+  const path = join(usageDir, name);
+  await mkdir(usageDir);
+  const base = { ...record("pro-id"), timestamp: new Date(`${day}T12:00:00`).getTime() };
+  const other = { ...base, timestamp: base.timestamp + 1, accountId: "plus-id" };
+  const oldOnly = { ...base, timestamp: base.timestamp + 2 };
+  const appended = { ...base, timestamp: base.timestamp + 3 };
+  await writeFile(path, [base, other].map((item) => JSON.stringify(item) + "\n").join(""));
+  await writeFile(legacyPath, [base, oldOnly].map((item) => JSON.stringify(item) + "\n").join(""));
+  await appendUsage(appended);
+  await expect(readFile(legacyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  expect((await stat(path)).mode & 0o777).toBe(0o600);
+  expect((await readFile(path, "utf8")).trim().split("\n")).toHaveLength(4);
+  expect((await readDailyUsage(day, "pro-id")).totalTokens).toBe(330);
+  const view = new UsageAggregator();
+  await view.refresh();
+  expect(view.state().records).toBe(4);
+  const backup = await backupHistory();
+  const snapshot = JSON.parse(await readFile(backup, "utf8")) as { ledgers: Record<string, string> };
+  expect(Object.keys(snapshot.ledgers)).toEqual([name]);
+  expect((await resetAccountUsage("pro-id")).removed).toBe(3);
+  expect((await importHistory(backup)).records).toBe(3);
+  expect((await importHistory(backup)).records).toBe(0);
+  const restarted = new UsageAggregator();
+  await restarted.refresh();
+  expect(restarted.state().records).toBe(4);
+});
+
+it("restores the existing flat backup format into usage/ without changing its schema", async () => {
+  const { dir } = await setup();
+  const day = localDate(Date.now());
+  const name = `usage-${day}.jsonl`;
+  const backup = join(dir, "old-backup.json");
+  await writeFile(backup, JSON.stringify({ schema: 1, createdAt: new Date().toISOString(), profiles: [],
+    ledgers: { [name]: JSON.stringify(record("pro-id")) + "\n" } }));
+  expect((await importHistory(backup)).records).toBe(1);
+  expect((await importHistory(backup)).records).toBe(0);
+  expect((await readFile(join(dir, "pi-quota-monitor", "usage", name), "utf8")).trim()).toContain("pro-id");
+  await expect(readFile(join(dir, "pi-quota-monitor", name), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("refuses an unsafe usage directory or incomplete collision without removing old ledgers", async () => {
+  const { dir } = await setup();
+  const root = join(dir, "pi-quota-monitor");
+  const name = `usage-${localDate(Date.now())}.jsonl`;
+  const oldPath = join(root, name);
+  const usageDir = join(root, "usage");
+  await mkdir(root);
+  await writeFile(oldPath, JSON.stringify(record("pro-id")) + "\n");
+  const outside = join(dir, "outside");
+  await mkdir(outside);
+  await symlink(outside, usageDir);
+  await expect(appendUsage(record("pro-id"))).rejects.toThrow("Invalid usage directory");
+  expect(await readFile(oldPath, "utf8")).toContain("pro-id");
+  await rm(usageDir);
+  await mkdir(usageDir);
+  const target = join(usageDir, name);
+  await writeFile(target, JSON.stringify(record("plus-id"))); // Incomplete JSONL.
+  await expect(backupHistory()).rejects.toThrow("Cannot merge incomplete usage ledgers");
+  expect(await readFile(oldPath, "utf8")).toContain("pro-id");
+  expect(await readFile(target, "utf8")).toContain("plus-id");
 });
 
 it("writes manual backups only to an existing private directory chosen on the Pi machine", async () => {
@@ -165,7 +241,8 @@ it("writes manual backups only to an existing private directory chosen on the Pi
 it("refuses reset when another ledger is damaged, without partially changing valid history", async () => {
   const { dir } = await setup();
   await saveAccount("pro");
-  const root = join(dir, "pi-quota-monitor");
+  const root = join(dir, "pi-quota-monitor", "usage");
+  await mkdir(root);
   const valid = join(root, `usage-${localDate(Date.now())}.jsonl`);
   await writeFile(valid, JSON.stringify(record("pro-id")) + "\n");
   await writeFile(join(root, "usage-2000-01-01.jsonl"), "{broken}\n");
@@ -191,7 +268,7 @@ it("attributes usage to the account captured at request time, not after a switch
   await handlers.get("message_end")?.({ message: { role: "assistant", provider: "openai-codex", model: "gpt-6-sol", timestamp: Date.now(), stopReason: "stop",
     usage: { input: 100, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 110 } } }, ctx);
   await handlers.get("session_shutdown")?.({}, ctx);
-  const ledger = JSON.parse((await readFile(join(dir, "pi-quota-monitor", `usage-${localDate(Date.now())}.jsonl`), "utf8")).trim());
+  const ledger = JSON.parse((await readFile(join(dir, "pi-quota-monitor", "usage", `usage-${localDate(Date.now())}.jsonl`), "utf8")).trim());
   expect(ledger.accountId).toBe("pro-id");
 });
 

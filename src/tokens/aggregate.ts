@@ -1,7 +1,8 @@
 import { constants, createReadStream } from "node:fs";
 import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { configDirectory } from "../config.js";
+import { configDirectory, usageDirectory } from "../config.js";
+import { withLedgerLock } from "../history.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { localDate } from "./store.js";
@@ -81,7 +82,7 @@ export class UsageAggregator {
   private inFlight?: Promise<void>;
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly directory = configDirectory(), private readonly accountId?: string | null) {}
+  constructor(private readonly directory = usageDirectory(), private readonly accountId?: string | null) {}
 
   state(): UsageSummary { return this.summary; }
 
@@ -123,6 +124,14 @@ export class UsageAggregator {
   }
 
   private async scan(): Promise<{ files: Map<string, FileState>; summary: UsageSummary }> {
+    if (this.directory === usageDirectory()) {
+      try {
+        const legacy = await readdir(configDirectory(), { withFileTypes: true });
+        if (legacy.some((entry) => entry.isFile() && FILE_NAME.test(entry.name))) await withLedgerLock(async () => {});
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
     let names: string[];
     try {
       const entries = await readdir(this.directory, { withFileTypes: true });

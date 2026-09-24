@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageAggregator } from "../src/tokens/aggregate.js";
@@ -7,7 +7,13 @@ import { localDate } from "../src/tokens/store.js";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
-async function fixture() { const dir = await mkdtemp(join(tmpdir(), "quota-aggregate-")); directories.push(dir); return dir; }
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "quota-aggregate-"));
+  directories.push(root);
+  const dir = join(root, "usage");
+  await mkdir(dir);
+  return dir;
+}
 function entry(day: string, provider = "openai-codex", model = "same", totalTokens = 17) {
   return { timestamp: new Date(`${day}T12:00:00`).getTime(), provider, model,
     input: 10, output: 5, reasoning: 3, cacheRead: 1, cacheWrite: 1, totalTokens };
