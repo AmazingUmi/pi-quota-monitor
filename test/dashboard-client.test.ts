@@ -67,6 +67,26 @@ it("keeps additional model groups compact without hiding their quota summary", a
   expect(updated.querySelector("details")!.open).toBe(true);
 });
 
+it("follows a successful account switch instead of staying on the old account's historical ledger", async () => {
+  const { get, dom, fetch, reload } = await mount();
+  const changed = dashboardFixture();
+  changed.currentAccountId = "account:plus";
+  changed.currentProfile = "personal-plus";
+  fetch.mockImplementation(async (url: string) => new Response(JSON.stringify({ ...changed,
+    selectedAccountId: String(url).includes("account%3Apro") ? "account:pro" : "account:plus",
+  })));
+  await reload();
+  expect(get<HTMLSelectElement>("usage-account").value).toBe("account:plus");
+  expect(get("account-current").textContent).toBe("personal-plus");
+  expect(fetch.mock.calls.some(([url]) => String(url).includes("account%3Apro"))).toBe(true);
+  expect(fetch.mock.calls.at(-1)?.[0]).toBe("/api/state");
+  // A deliberate historical selection remains pinned across subsequent polls.
+  get<HTMLSelectElement>("usage-account").value = "account:pro";
+  get("usage-account").dispatchEvent(new dom.window.Event("change"));
+  await reload();
+  expect(get<HTMLSelectElement>("usage-account").value).toBe("account:pro");
+});
+
 it("does not reuse active Codex quota or money in other ledger views", async () => {
   const { get, state, reload } = await mount();
   state.selectedAccountId = "all";

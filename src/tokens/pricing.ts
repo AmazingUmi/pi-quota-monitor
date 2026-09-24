@@ -1,6 +1,6 @@
 import type { TokenUsageRecord } from "../types.js";
 
-/** USD per million text tokens, standard paid API tier, checked 2026-09-23. */
+/** USD per million text tokens, standard paid API tier, checked 2026-09-24. */
 export interface Rates { input: number; output: number; cacheRead: number; cacheWrite?: number }
 export interface PriceRow {
   provider: "openai-codex" | "antigravity";
@@ -30,7 +30,7 @@ const claude = (model: string, input: number, output: number, cacheRead: number,
   provider: "antigravity", model, rates: { input, output, cacheRead, cacheWrite }, source: CLAUDE,
 });
 
-export const PRICE_DATE = "2026-09-23";
+export const PRICE_DATE = "2026-09-24";
 export const PRICE_TABLE: readonly PriceRow[] = [
   openai("gpt-6-sol", 2, 10, 0.2, 2.5),
   openai("gpt-6-luna", 0.1, 0.5, 0.01, 0.125),
@@ -38,6 +38,7 @@ export const PRICE_TABLE: readonly PriceRow[] = [
   openai("gpt-5.4", 2.5, 15, 0.25),
   openai("gpt-5.4-mini", 0.75, 4.5, 0.075),
   openai("gpt-5.3-codex", 1.75, 14, 0.175),
+  gemini("gemini-3.8-flash", 0.75, 3.75, 0.075),
   gemini("gemini-3.1-pro-preview", 2, 12, 0.2, [4, 18, 0.4]),
   gemini("gemini-3-flash-preview", 0.5, 3, 0.05),
   gemini("gemini-3.1-flash-lite", 0.25, 1.5, 0.025),
@@ -54,6 +55,7 @@ export const PRICE_TABLE: readonly PriceRow[] = [
 function priceFor(provider: string, model: string): PriceRow | undefined {
   const normalized = model.toLowerCase();
   return PRICE_TABLE.find((row) => row.provider === provider && (normalized === row.model
+    || (row.model === "gemini-3.8-flash" && /^gemini-3\.8-flash-(?:low|medium|high)$/.test(normalized))
     || (row.model === "gemini-3.1-pro-preview" && normalized === "gemini-3.1-pro-preview-customtools")
     || (row.model.startsWith("claude-") && new RegExp(`^${row.model}(?:-thinking|-\\d{8})?$`).test(normalized))));
 }
@@ -62,7 +64,10 @@ function priceFor(provider: string, model: string): PriceRow | undefined {
 export function estimateRecordCost(record: TokenUsageRecord): number | undefined {
   // New ledger entries retain their recorded amount even when the catalog later changes.
   if (record.estimatedCostUsd !== undefined) return Number.isFinite(record.estimatedCostUsd) && record.estimatedCostUsd >= 0 ? record.estimatedCostUsd : undefined;
-  if (record.pricingAsOf !== undefined) return undefined; // Known unpriced at collection time.
+  // Preserve the meaning of previously collected unknown models. The 3.8 Flash
+  // addition is an intentional, narrow backfill for its old unpriced ledger entries.
+  if (record.pricingAsOf !== undefined && !(record.provider === "antigravity" &&
+    /^gemini-3\.8-flash(?:-(?:low|medium|high))?$/i.test(record.model))) return undefined;
   const price = priceFor(record.provider, record.model);
   if (!price) return undefined;
   const prompt = record.input + record.cacheRead + record.cacheWrite;

@@ -605,6 +605,13 @@ async function load() {
   if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota-console");
   const state = await response.json();
   if (selectedAccount !== requested) return;
+  // A switch leaves the old profile in the account list. Do not keep viewing its
+  // historical ledger when this tab was following the previously active account.
+  if (latest?.currentAccountId && requested === latest.currentAccountId
+    && state.currentAccountId !== latest.currentAccountId) {
+    selectedAccount = undefined;
+    return load();
+  }
   control = state.control;
   latest = state;
   selectedAccount = state.selectedAccountId;
@@ -665,7 +672,9 @@ async function queueAccountCommand(command, args = "", feedbackId = "account-fee
       body: JSON.stringify({ command, args }),
     });
     if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
-    const message = "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
+    const message = command === "use"
+      ? "已提交账号切换；请在 Pi 窗口确认。凭据切换后当前会话不变，本页将跟随新账号。"
+      : "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
     $(feedbackId).textContent = message;
     if (dialogId) { $(dialogId).close(); $("account-feedback").textContent = message; }
   } catch (error) {
@@ -739,7 +748,7 @@ $("account-import-form").addEventListener("submit", (event) => {
 });
 $("account-switch-confirm").addEventListener("click", () => {
   const name = $("account-switch-profile").value;
-  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认并开启新会话。`)) {
+  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认；当前会话不会重建。`)) {
     void queueAccountCommand("use", name, "account-switch-feedback", "account-switch-dialog");
   }
 });

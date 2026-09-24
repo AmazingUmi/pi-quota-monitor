@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readStoredCredential, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "./accounts.js";
 import { backupHistory, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
@@ -41,7 +41,7 @@ function safeAccountFailure(error: unknown): string {
     "Profile name conflict; import aborted.", "An account ID is required.",
     "Ledger contains an incomplete or damaged line; reset aborted without changing usage.",
     "Please clear queued messages before switching.",
-    "Session change was cancelled; account switch rolled back.",
+    "Pi did not load the selected Codex credential; account switch rolled back.",
     "Unknown account profile.", "Reset requires an interactive confirmation.",
     "Restore requires an interactive confirmation.", "Delete requires an interactive confirmation.",
     "Switch to another account before deleting the active profile.",
@@ -490,7 +490,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       if (surplus && action !== "import" && !pathAction) { ctx.ui.notify("参数过多。", "warning"); return; }
       const notify = (text: string, level: "info" | "warning" | "error" = "info") => {
         accountNotice = { message: text, level, at: Math.max(Date.now(), (accountNotice?.at ?? 0) + 1) };
-        if (ctx.hasUI) ctx.ui.notify(text, level);
+        const activeCtx = currentContext ?? ctx;
+        if (activeCtx.hasUI) activeCtx.ui.notify(text, level);
         else console.error(text);
       };
       try {
@@ -521,17 +522,29 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           await ctx.waitForIdle();
           await ledgerQueue;
           if (ctx.hasPendingMessages()) throw new Error("Please clear queued messages before switching.");
-          if (ctx.hasUI && !await ctx.ui.confirm("切换 Codex 账号", `切换到 ${label} 并开启新 Pi 会话？`)) return;
+          if (ctx.hasUI && !await ctx.ui.confirm("切换 Codex 账号", `切换到 ${label}？将替换 Pi 的 Codex 凭据，不会强制切换当前会话。`)) return;
           const old = (await listAccounts()).current;
           await backupHistory();
           await useAccount(label);
           try {
-            const result = await ctx.newSession();
-            if (result.cancelled) throw new Error("Session change was cancelled; account switch rolled back.");
+            // As in pi-auth use, switch only the Codex entry in auth.json. Pi's
+            // credential store reloads its revision on the next request. A session
+            // replacement is independent and may be vetoed by other extensions.
+            const resolved = await ctx.modelRegistry.getProviderAuth("openai-codex");
+            const stored = readStoredCredential("openai-codex");
+            if (activeAccountId() !== (await listAccounts()).profiles.find((p) => p.name === label)?.accountId
+              || !stored || stored.type !== "oauth" || !resolved || resolved.auth.apiKey !== stored.access) {
+              throw new Error("Pi did not load the selected Codex credential; account switch rolled back.");
+            }
           } catch (error) {
             if (old && old !== label) await useAccount(old);
             throw error;
           }
+          if (active && currentContext) {
+            void refresh("openai-codex", currentContext, true);
+            void updateDailyDate(generation);
+          }
+          notify(`已切换 Codex 账号为：${label}。当前会话保留；如需全新 Pi 进程，请退出并重新启动 Pi。`);
         } else if (action === "backup" && !extra) {
           await ctx.waitForIdle();
           await ledgerQueue;
@@ -576,7 +589,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     ["quota-account-current", "current", "Show current Codex profile"],
     ["quota-account-save", "save", "Save current native Pi OAuth profile"],
     ["quota-account-import", "import", "Import a native Pi OAuth profile"],
-    ["quota-account-use", "use", "Switch Codex account and start a new session"],
+    ["quota-account-use", "use", "Switch Codex credential without replacing the session"],
     ["quota-account-delete", "delete", "Delete an inactive saved Codex profile"],
     ["quota-account-backup", "backup", "Back up profiles and usage (optional private directory)"],
     ["quota-account-backups", "backups", "List account backups"],

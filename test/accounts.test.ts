@@ -103,9 +103,8 @@ it("makes a same-process Pi ModelRuntime pick up the switched OAuth credential",
     const before = await session.modelRuntime.getAuth("openai-codex");
     await useAccount("plus");
     const after = await session.modelRuntime.getAuth("openai-codex");
-    expect(before?.auth.apiKey).toBeDefined();
-    expect(after?.auth.apiKey).toBeDefined();
-    expect(before?.auth.apiKey).not.toBe(after?.auth.apiKey);
+    expect(before?.auth.apiKey).toBe("access-pro-id");
+    expect(after?.auth.apiKey).toBe("access-plus-id");
   } finally { session.dispose(); }
 });
 
@@ -357,30 +356,66 @@ it("keeps quota amount estimates bound to the active account when viewing totals
   }
 });
 
-it("switches through the Pi command only after idle, and requests a new session", async () => {
+it("switches like pi-auth use without depending on a cancellable session replacement", async () => {
   const { dir } = await setup();
   await saveAccount("pro");
   const plusPath = join(dir, "plus.json");
   await writeFile(plusPath, JSON.stringify(auth("plus-id")));
   await importAccount("plus", plusPath);
+  process.env.PI_OFFLINE = "1";
+  const { session } = await createAgentSession({ sessionManager: SessionManager.inMemory(), noTools: "all" });
   let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
   quotaMonitor({
     on() { return () => {}; },
     registerCommand(name: string, options: { handler: typeof command }) { if (name === "quota-account-use") command = options.handler; },
   } as unknown as ExtensionAPI);
   const events: string[] = [];
-  let cancel = false;
+  const confirmPrompts: string[] = [];
+  const notifications: string[] = [];
+  const newSession = vi.fn(async () => ({ cancelled: true }));
+  const ui = {
+    confirm: async (_title: string, message: string) => { events.push("confirm"); confirmPrompts.push(message); return true; },
+    notify: (message: string) => { notifications.push(message); },
+  };
   const ctx = {
-    hasUI: true,
-    ui: { confirm: async () => { events.push("confirm"); return true; }, notify: () => {} },
+    hasUI: true, ui,
+    modelRegistry: { getProviderAuth: () => session.modelRuntime.getAuth("openai-codex") },
     waitForIdle: async () => { events.push("idle"); },
     hasPendingMessages: () => false,
-    newSession: async () => { events.push("newSession"); return { cancelled: cancel }; },
+    newSession,
   } as unknown as ExtensionContext;
   await command("plus", ctx);
-  expect(events).toEqual(["idle", "confirm", "newSession"]);
+  expect(events).toEqual(["idle", "confirm"]);
+  expect(confirmPrompts.at(-1)).toContain("不会强制切换当前会话");
+  expect(notifications.at(-1)).toContain("已切换 Codex 账号为：plus");
   expect(activeAccountId()).toBe("plus-id");
-  cancel = true;
+  expect((await session.modelRuntime.getAuth("openai-codex"))?.auth.apiKey).toBe("access-plus-id");
+  expect(newSession).not.toHaveBeenCalled();
   await command("pro", ctx);
-  expect(activeAccountId()).toBe("plus-id"); // Cancelled session transition rolls auth back.
+  expect(activeAccountId()).toBe("pro-id");
+  expect((await session.modelRuntime.getAuth("openai-codex"))?.auth.apiKey).toBe("access-pro-id");
+  expect(newSession).not.toHaveBeenCalled();
+  session.dispose();
+});
+
+it("rolls back when Pi resolves the previous credential despite the auth.json switch", async () => {
+  const { dir } = await setup();
+  await saveAccount("pro");
+  const plusPath = join(dir, "plus.json");
+  await writeFile(plusPath, JSON.stringify(auth("plus-id")));
+  await importAccount("plus", plusPath);
+  let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
+  quotaMonitor({ on() { return () => {}; },
+    registerCommand(name: string, options: { handler: typeof command }) { if (name === "quota-account-use") command = options.handler; },
+  } as unknown as ExtensionAPI);
+  const notices: string[] = [];
+  const newSession = vi.fn();
+  await command("plus", { hasUI: true, ui: { confirm: async () => true, notify: (message: string) => notices.push(message) },
+    modelRegistry: { getProviderAuth: async () => ({ auth: { apiKey: "access-pro-id" } }) },
+    waitForIdle: async () => {}, hasPendingMessages: () => false, newSession,
+  } as unknown as ExtensionContext);
+  expect(newSession).not.toHaveBeenCalled();
+  expect(activeAccountId()).toBe("pro-id");
+  expect((await listAccounts()).current).toBe("pro");
+  expect(notices.at(-1)).toContain("rolled back");
 });

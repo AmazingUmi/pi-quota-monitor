@@ -22,13 +22,18 @@ it("uses exact provider/model matching, Gemini high-context rates, and conservat
     .toBeCloseTo((210_000 * 4 + 10_000 * 18) / 1e6);
   expect(estimateRecordCost(record("antigravity", "claude-sonnet-5-thinking", { input: 1000, cacheRead: 1000, cacheWrite: 1000, output: 1000 })))
     .toBeCloseTo((1000 * 2 + 1000 * 0.2 + 1000 * 2.5 + 1000 * 10) / 1e6);
+  expect(estimateRecordCost(record("antigravity", "gemini-3.8-flash", { input: 10_000, cacheRead: 20_000, output: 1000 })))
+    .toBeCloseTo((10_000 * 0.75 + 20_000 * 0.075 + 1000 * 3.75) / 1e6);
+  expect(estimateRecordCost(record("antigravity", "gemini-3.8-flash-high", { input: 10_000, cacheRead: 20_000, output: 1000 })))
+    .toBeCloseTo((10_000 * 0.75 + 20_000 * 0.075 + 1000 * 3.75) / 1e6);
+  expect(estimateRecordCost(record("antigravity", "gemini-3.8-flash-image"))).toBeUndefined();
   expect(estimateRecordCost(record("antigravity", "gpt-6-sol"))).toBeUndefined();
   expect(estimateRecordCost(record("openai-codex", "unknown"))).toBeUndefined();
   expect(estimateRecordCost(record("openai-codex", "gpt-5.4", { cacheWrite: 1 }))).toBeUndefined();
   expect(estimateRecordCost(record("antigravity", "gemini-3-flash-preview", { cacheWrite: 1 }))).toBeUndefined();
 });
 
-it("freezes the collected cost and never re-prices a recorded amount or an explicitly unpriced record", () => {
+it("freezes the collected cost, preserves recorded amounts, and retroactively prices unpriced records", () => {
   const usage = record("openai-codex", "gpt-6-sol");
   const saved = tokenRecord({ role: "assistant", provider: usage.provider, model: usage.model, api: "openai-codex-responses",
     timestamp: usage.timestamp, content: [], stopReason: "stop", usage: { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
@@ -36,11 +41,14 @@ it("freezes the collected cost and never re-prices a recorded amount or an expli
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: 17, pricingAsOf: "older-price" })).toBe(17);
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: 0, pricingAsOf: "older-price" })).toBe(0);
   expect(estimateRecordCost({ ...usage, pricingAsOf: "older-price" })).toBeUndefined();
+  expect(estimateRecordCost({ ...usage, provider: "antigravity", model: "gemini-3.8-flash", pricingAsOf: "older-price" }))
+    .toBeCloseTo(estimateRecordCost({ ...usage, provider: "antigravity", model: "gemini-3.8-flash" })!);
+  expect(estimateRecordCost({ ...usage, model: "unknown-model", pricingAsOf: "older-price" })).toBeUndefined();
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: -1 })).toBeUndefined();
 });
 
 it("publishes a dated, official-source price catalogue", () => {
-  expect(PRICE_DATE).toBe("2026-09-23");
+  expect(PRICE_DATE).toBe("2026-09-24");
   expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(12);
   for (const row of PRICE_TABLE) {
     expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com)\//);
