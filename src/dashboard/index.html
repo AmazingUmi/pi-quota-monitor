@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>用量控制台 · Pi Quota</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/style.css">
   <script src="/client.js" defer></script>
 </head>
@@ -62,7 +63,7 @@
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
             <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Antigravity 额度独立于 Codex 账号，在各视图共享。</p>
-            <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算周期与剩余金额；不会直接除以本周期全部已用额度。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
+            <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算当期总金额与剩余金额；不会直接除以本周期全部已用额度。OAI 额度增加或重置时间明显变化时开始新一期，不假定每期固定为 5 小时或 7 天；起点只是首次观察时间。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
       </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view"><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select><button id="refresh" class="button-primary" type="button"><span aria-hidden="true">↻</span> 刷新额度</button></div></div>
@@ -81,6 +82,17 @@
           <div id="agy-error" aria-live="polite"></div>
         </article>
       </div>
+      <details id="codex-period-details" class="panel period-panel">
+        <summary><span class="period-toggle-title">OAI 当期总金额估算 · 逐期变化</span><span class="period-toggle-hint period-collapsed-hint">展开查看历史趋势</span><span class="period-toggle-hint period-expanded-hint">收起历史趋势</span></summary>
+        <div class="period-content">
+          <div class="chart-heading"><p class="hint">按所选 Codex 账号隔离；缺少有效估算的周期留空，不当作 $0。</p>
+            <div class="chart-controls"><div><label for="codex-period-kind">额度窗口</label><select id="codex-period-kind"><option value="weekly">Weekly</option><option value="fiveHour">5H</option></select></div></div>
+          </div>
+          <div id="codex-period-chart" class="chart period-chart" role="img" aria-label="OAI 逐期总金额估算">正在读取周期记录…</div>
+          <p id="codex-period-summary" class="hint" aria-live="polite"></p>
+          <p class="chart-footnote">每点代表首次观察到的一期；空缺表示不可估算。实心点为已观察到下一期，空心点表示尚未观察到下一期。提前重置只能在下一次额度读数时发现。金额按本地 Token 与 API 标价外推，非实际订阅额度。</p>
+        </div>
+      </details>
     </section>
 
     <section class="section usage-section" aria-labelledby="usage-title">

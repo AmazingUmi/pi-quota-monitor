@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import type { QuotaDashboard } from "./dashboard.js";
 import { attachDashboard, detachDashboard } from "./resident-dashboard.js";
 import { QuotaReadings } from "./quota-readings.js";
+import { CodexPeriodStore } from "./codex-periods.js";
 import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
 import { RefreshScheduler } from "./scheduler.js";
@@ -81,6 +82,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let scheduler: RefreshScheduler | undefined;
   let dashboard: QuotaDashboard | undefined;
   let accountAggregators: UsageAggregator[] = [];
+  const views = new Map<string, UsageAggregator>();
   let accountNotice: { message: string; level: "info" | "warning" | "error"; at: number } | undefined;
   let abortController: AbortController | undefined;
   let currentContext: ExtensionContext | undefined;
@@ -116,6 +118,16 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!live(epoch) || codexAccountId !== account || activeAccountId() !== account) return;
     codexHistory = readings;
     if (!codex.value && readings.length) { codex.value = readings.at(-1); codex.restored = true; }
+  }
+
+  async function syncCodexPeriods(account: string, view?: UsageAggregator): Promise<void> {
+    if (codexAccountId !== account || activeAccountId() !== account || !codex.value) return;
+    const usage = view ?? new UsageAggregator(undefined, account);
+    await ledgerQueue;
+    await usage.refresh();
+    if (codexAccountId !== account || activeAccountId() !== account) return;
+    const estimates = quotaAmountEstimates(usage, codex, {}, codexHistory, []).codex;
+    await new CodexPeriodStore(account).update(codexHistory, estimates);
   }
 
   function persistReading(write: () => Promise<void>, cache: ProviderCache<unknown>, epoch: number): Promise<void> {
@@ -169,7 +181,11 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           codex.error = undefined;
           codex.restored = false;
           codexHistory = [...codexHistory.filter((q) => q.capturedAt > Date.now() - 8 * 86_400_000), result];
-          if (account) await persistReading(() => new QuotaReadings("codex", account).append(result), codex, epoch);
+          if (account) {
+            await persistReading(() => new QuotaReadings("codex", account).append(result), codex, epoch);
+            try { await syncCodexPeriods(account, views.get(`account:${account}`)); }
+            catch { if (live(epoch) && codexAccountId === account) codex.storageError = "周期估算记录保存失败；当前额度读数仍可用。"; }
+          }
         } else {
           const localAgy = ctx.modelRegistry.getProvider(provider)?.baseUrl?.startsWith("agy://") ?? false;
           // Local agy uses a sentinel API key, not an OAuth credential. Its own
@@ -257,6 +273,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     dashboard = undefined;
     accountAggregators.forEach((view) => view.stop());
     accountAggregators = [];
+    views.clear();
     const epoch = ++generation;
     active = true;
     abortController = new AbortController();
@@ -363,7 +380,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (command === "console") {
       try {
       if (!dashboard) {
-        const views = new Map<string, UsageAggregator>();
         let syncingViews: Promise<{ accounts: Array<{ id: string; name: string }>; currentId?: string; currentProfile?: string; profiles: Array<{ name: string; accountId: string }> }> | undefined;
         const ensureViews = () => {
           if (syncingViews) return syncingViews;
@@ -397,7 +413,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           return syncingViews;
         };
         try { await ensureViews(); }
-        catch { accountAggregators.forEach((view) => view.stop()); accountAggregators = []; throw new Error("Unable to load account usage."); }
+        catch { accountAggregators.forEach((view) => view.stop()); accountAggregators = []; views.clear(); throw new Error("Unable to load account usage."); }
         dashboard = await attachDashboard(dashboardOwner, {
           state: async (requested) => {
             const { accounts, currentId, currentProfile, profiles } = await ensureViews();
@@ -410,12 +426,22 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             const visibleCodex = showingCurrent && codexAccountId === currentId ? codex : {};
             await ledgerQueue;
             if ((view.state().updatedAt ?? 0) < Math.max(visibleCodex.value?.capturedAt ?? 0, antigravity.value?.capturedAt ?? 0)) await view.refresh();
+            const quotaEstimates = quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory);
+            let codexPeriods = [] as Awaited<ReturnType<CodexPeriodStore["load"]>>;
+            try {
+              codexPeriods = selected === "all" ? [] : showingCurrent && currentId && codexAccountId === currentId
+                ? await new CodexPeriodStore(currentId).update(codexHistory, quotaEstimates.codex)
+                : await new CodexPeriodStore(selected.slice("account:".length)).load();
+            } catch {
+              if (showingCurrent) codex.storageError = "周期估算记录读取失败；当前额度读数仍可用。";
+            }
             const backups = await listBackups();
             if (!live(epoch)) throw new Error("Session is no longer active.");
             return { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId: selected,
+              codexPeriods,
               currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
               antigravity, usage: view.state(), context: currentContext ? contextMetrics(currentContext) : null,
-              quotaEstimates: quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory), config, updatedAt: Date.now() };
+              quotaEstimates, config, updatedAt: Date.now() };
           },
           accountCommand: async (command, args) => {
             if (!live(epoch)) throw new Error("Session is no longer active.");
@@ -451,6 +477,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
         dashboard = undefined;
         accountAggregators.forEach((view) => view.stop());
         accountAggregators = [];
+        views.clear();
         render(ctx);
         const reason = error instanceof Error ? error.message : "未知错误";
         const message = `无法启动本地额度控制台：${reason} 可修改 pi-quota-monitor/config.json 中的 dashboardPort 后重新加载插件。`;
@@ -628,6 +655,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     dashboard = undefined;
     accountAggregators.forEach((view) => view.stop());
     accountAggregators = [];
+    views.clear();
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
     currentContext = undefined;

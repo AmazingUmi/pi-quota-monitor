@@ -35,12 +35,26 @@ describe("Codex", () => {
 
   it("classifies a Pro weekly-only primary without inventing a five-hour quota", () => {
     const result = parseCodexQuota({ plan_type: "pro", rate_limit: {
-      primary_window: { used_percent: 87, limit_window_seconds: 604800, reset_at: 1780506000 },
+      primary_window: { used_percent: 87, limit_window_seconds: 604800, reset_at: (now + 2 * 86_400_000) / 1000 },
       secondary_window: null,
     } }, now);
     expect(result.fiveHour).toBeUndefined();
     expect(result.weekly?.remainingPercent).toBe(13);
-    expect(formatStatus({ value: result }, {}, emptyTotals(), false)).toContain("OAI -/13%");
+    expect(formatStatus({ value: result }, {}, emptyTotals(), true, now)).toContain("OAI -/13% ↻2d0h");
+  });
+
+  it("shows the weekly reset in the OAI footer for Pro, keeping the 5h reset for Plus", () => {
+    const rate_limit = {
+      primary_window: { used_percent: 27, limit_window_seconds: 18000, reset_at: (now + 90 * 60_000) / 1000 },
+      secondary_window: { used_percent: 39, limit_window_seconds: 604800, reset_at: (now + (2 * 24 + 3) * 60 * 60_000) / 1000 },
+    };
+    const pro = parseCodexQuota({ plan_type: "ProLite", rate_limit }, now);
+    const plus = parseCodexQuota({ plan_type: "plus", rate_limit }, now);
+    expect(formatStatus({ value: pro }, {}, emptyTotals(), true, now)).toContain("OAI 73%/61% ↻2d3h");
+    expect(formatStatus({ value: plus }, {}, emptyTotals(), true, now)).toContain("OAI 73%/61% ↻1h30m");
+    expect(formatStatus({ value: pro }, {}, emptyTotals(), false, now)).toContain("OAI 73%/61% | ");
+    expect(formatStatus({ value: { ...pro, weekly: { label: "weekly", remainingPercent: 61 } } }, {}, emptyTotals(), true, now))
+      .toContain("OAI 73%/61% | ");
   });
 
   it("treats a single Pro window without duration as weekly, but does not do so for Plus", () => {

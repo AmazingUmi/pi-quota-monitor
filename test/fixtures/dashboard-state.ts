@@ -35,6 +35,14 @@ export function dashboardFixture() {
     },
     context: { tokens: 70720, contextWindow: 272000, percent: 26 },
     quotaEstimates: { codex: { fiveHour: estimate, weekly: estimate }, antigravity: { groups: [{ name: "Gemini", windows: [estimate, estimate] }, { name: "Claude / GPT", windows: [estimate, estimate] }] } },
+    codexPeriods: [
+      { id: `weekly:${now - 8 * 86_400_000}`, kind: "weekly", plan: "plus", startedAt: now - 8 * 86_400_000,
+        lastAt: now - 7 * 86_400_000, closedAt: now - 6 * 86_400_000, boundary: "increase", remainingPercent: 12, estimatedTotalUsd: 40, estimateAsOf: now - 7 * 86_400_000 },
+      { id: `weekly:${now - 6 * 86_400_000}`, kind: "weekly", plan: "plus", startedAt: now - 6 * 86_400_000,
+        lastAt: now - 5 * 86_400_000, closedAt: now - 4 * 86_400_000, boundary: "increase", remainingPercent: 50 },
+      { id: `weekly:${now - 4 * 86_400_000}`, kind: "weekly", plan: "plus", startedAt: now - 4 * 86_400_000,
+        lastAt: now, remainingPercent: 61, estimatedTotalUsd: 46.67, estimateAsOf: now },
+    ],
     config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true, showOaiInStatusbar: true, showAgyInStatusbar: true },
     updatedAt: now,
   };

@@ -150,7 +150,11 @@ summary { cursor: pointer; }
 .pie-legend i { width: 8px; height: 8px; border-radius: 50%; }
 .remaining-key { background: var(--accent); }
 .used-key { background: var(--track); border: 1px solid var(--muted); }
-.quota-money { display: block; margin-top: 6px; padding-top: 9px; border-top: 1px dashed var(--border); }
+.quota-money-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 6px; padding-top: 9px; border-top: 1px dashed var(--border); }
+.quota-money-values > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.quota-money-values span { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.quota-money-values strong { font: 600 15px/1.4 var(--mono); letter-spacing: -.03em; overflow-wrap: anywhere; }
+.quota-money { display: block; margin-top: 6px; }
 .quota-money summary { color: var(--muted); font-size: 11px; }
 .quota-money p { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .quota-groups { display: flex; flex-direction: column; gap: 24px; }
@@ -172,6 +176,20 @@ summary { cursor: pointer; }
 .trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .trend-panel { min-width: 0; --chart-color: var(--accent); }
 .cost-trend { --chart-color: var(--chart-secondary); }
+.period-panel { margin-top: 16px; --chart-color: var(--chart-secondary); }
+.period-panel > summary { padding: 2px 0; color: var(--text); }
+.period-panel > summary::marker { color: var(--accent); }
+.period-toggle-title { font-size: 13px; font-weight: 600; }
+.period-toggle-hint { margin-left: 12px; color: var(--muted); font-size: 11px; }
+.period-expanded-hint, .period-panel[open] .period-collapsed-hint { display: none; }
+.period-panel[open] .period-expanded-hint { display: inline; }
+.period-content { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+.period-content .chart-heading { margin-bottom: 18px; }
+.period-chart { min-height: 180px; }
+.period-stem { stroke: var(--chart-color); opacity: .25; }
+.period-missing { stroke: var(--muted); stroke-width: 3; }
+.period-active { fill: var(--panel); stroke: var(--chart-color); stroke-width: 2; }
+#codex-period-summary { margin-top: 12px; font-size: 10px; }
 .trend-title { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; font-size: 11px; font-weight: 500; }
 .legend-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--chart-color); }
 .chart { position: relative; min-width: 0; min-height: 180px; }
@@ -312,7 +330,7 @@ dialog [role="status"] { overflow-wrap: anywhere; margin-top: 12px; }
 }
 @media (forced-colors: active) {
   .quota-meter { border: 1px solid CanvasText; }
-  .chart-line, .chart-point { stroke: CanvasText; }
+  .chart-line, .chart-point, .period-stem, .period-active, .period-missing { stroke: CanvasText; }
   .pie-remaining { fill: Highlight; }
   .pie-used { fill: Canvas; stroke: CanvasText; }
   .grid-line { stroke: GrayText; }

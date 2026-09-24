@@ -48,6 +48,23 @@ it("never crosses a reset or quota increase and accepts small reset timestamp ro
   expect(result.estimatedRemainingUsd).toBe(48);
 });
 
+it("recalibrates after an early manual increase without crossing into the old OAI period", () => {
+  const before = sample(now - 180_000, 30);
+  const reset = sample(now - 120_000, 95);
+  const after = sample(now - 60_000, 85);
+  const periodCost = vi.fn(() => cost);
+  const result = estimateQuotaAmount([before, reset, after], ONE_WEEK_MS, periodCost, now, false, true);
+  expect(periodCost).toHaveBeenCalledExactlyOnceWith(reset.capturedAt, after.capturedAt);
+  expect(result).toMatchObject({ sampleStartAt: reset.capturedAt, estimatedPeriodUsd: 80 });
+});
+
+it("estimates within an unusually long OAI period without assuming exactly 7 days", () => {
+  const earlier = sample(now - 7 * 86_400_000, 70, now + 3_600_000);
+  const later = sample(now, 60, now + 3_600_000);
+  const estimate = estimateQuotaAmount([earlier, later], FIVE_HOURS_MS, () => cost, now, false, true);
+  expect(estimate).toMatchObject({ sampleStartAt: earlier.capturedAt, estimatedPeriodUsd: 80, estimatedRemainingUsd: 48 });
+});
+
 it("filters Antigravity calibration by model pool and does not borrow Codex history when hidden", () => {
   const time = Date.now();
   const start = time - 3600_000;

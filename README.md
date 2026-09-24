@@ -4,53 +4,51 @@
 
 ## 中文
 
-显示 OpenAI Codex 与 Antigravity 的剩余额度、Token 用量和 API 标价估算。支持 Pi TUI / pi-web 状态栏、`/quota` 命令及本机 Web 控制台。
+在 Pi 状态栏、`/quota` 和本机控制台查看 OpenAI Codex / Antigravity 额度与本地 Token 用量。
 
 ### 安装
 
-需要 Node.js 22+、兼容 `@earendil-works/pi-coding-agent` 的 Pi，以及已登录的 Provider。本插件不提供登录服务；Antigravity 需另行安装并登录相应 Provider。本机 agy 模式还需要可执行的 `agy`。
+需要 Node.js 22+。额度查询需要对应服务商的登录凭据；本机 Antigravity `agy` 模式还需要 `agy` 可执行文件。
 
 ```bash
 pi install npm:pi-quota-monitor
 ```
 
-安装后重启 Pi 或重新加载扩展。仓库开发时可用 `pi --extension ./src/index.ts` 临时加载，或用 `pi install .` 安装本地包。
+安装后重启 Pi 或重新加载扩展。仓库开发可运行 `pi --extension ./src/index.ts`，或 `pi install .`。
 
-### 常用命令
+### 命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `/quota` | 查看额度、重置时间及 Token 用量 |
-| `/quota-refresh` | 立即刷新额度 |
-| `/quota-interval 180` | 设置后台刷新间隔（60–3600 秒） |
+| `/quota` | 查看额度、重置时间及用量 |
+| `/quota-refresh` | 立即查询额度 |
+| `/quota-interval 180` | 设置查询间隔（60–3600 秒） |
 | `/quota-console` | 打开本机控制台 |
-| `/quota-account-save pro` | 保存当前 Codex OAuth 账号 |
+| `/quota-account-save <名称>` | 保存当前 Codex OAuth 账号 |
 | `/quota-account-list` | 列出已保存账号 |
-| `/quota-account-use pro` | 切换 Codex 凭据，保留当前会话 |
+| `/quota-account-use <名称>` | 切换 Codex 账号，不更换会话 |
+| `/quota-account-import <名称> <本机JSON路径>` | 导入 Pi OAuth profile |
 
-状态栏中 OAI / AGY 的两个百分比分别为 **5 小时 / 每周剩余额度**；未知值显示为 `-`。AGY 状态栏显示 Gemini，其他模型额度见 `/quota` 或控制台。查询失败时保留上次成功读数，并标明状态。
+其他账号操作见 `/quota-account-current`、`/quota-account-backup`、`/quota-account-backups`、`/quota-account-restore`、`/quota-account-delete`、`/quota-account-reset-cache` 和 `/quota-account-reset-usage`。
 
-### 控制台与账号
+### 显示与估算
 
-控制台默认位于 `http://127.0.0.1:38457`，仅监听 Pi 所在机器的本地地址；远程访问请自行使用 SSH 端口转发，**不要公开到局域网**。端口被占用时会临时使用可用端口。控制台中的端口设置重启 Pi 后生效；页面会定期读取本地缓存，不会因轮询反复请求额度 API。控制台随 Pi 进程运行，不是独立守护进程。
+- 状态栏 OAI / AGY 显示 **5 小时 / 每周剩余额度**；未知值为 `-`。启用倒计时后，OAI 的 `↻` 对 Pro 使用每周窗口，其他套餐使用 5 小时窗口。
+- 控制台默认地址：`http://127.0.0.1:38457`，仅监听本机。远程查看可使用 SSH 端口转发；不要将端口暴露到局域网。
+- OAI 额度卡片并列显示剩余与当期总金额**估算**。逐期趋势默认收起，按 Codex 账号分别记录 5 小时和每周窗口；额度增加或重置时间明显变化时开启新一期。
+- 周期金额依据同一期内两次读数之间的本地 Token 金额和额度下降量外推。样本或计价数据不足时显示 `—`，不记作零。两次查询之间的重置只能在下一次读数时发现。
+- 金额按公开 API 标价估算，**不是订阅实付、账户余额或服务商额度**；其他客户端用量也会影响结果。价格表见 [`src/tokens/pricing.ts`](src/tokens/pricing.ts)。
 
-先使用 Pi 原生 `/login` 登录 Codex，再用 `/quota-account-save <名称>` 保存账号；登录其他账号后重复保存。也可用 `/quota-account-import <名称> <本机JSON路径>` 导入单个 Pi OAuth profile。切换账号会先备份、保存当前凭据，再替换 Codex 凭据并验证 Pi 运行时读取的凭据；验证失败会回滚。**不会自动新建会话或重启 Pi**。不要在其他 Pi 进程正在请求时切换：同一 Pi 数据目录的 `auth.json` 是共享的。
+### 账号与本地数据
 
-控制台可查看总体及各 Codex 账号的账本；切换后默认跟随新账号，手动选定的历史账本不会被覆盖。只有当前账号显示 Codex 实时额度与周期金额估算。无账号归属的旧 Codex 记录只进入总体用量；Antigravity 用量在各账号视图中共享。
+- 使用 Pi 的 `/login` 登录 Codex 后，可保存或切换账号。切换会验证凭据并在失败时回滚；同一 Pi 数据目录的其他进程也会读取共享的 `auth.json`，请勿在其请求期间切换。
+- 只有当前登录账号可查询 Codex 实时额度；已记录的逐期估算可按历史账号查看。Antigravity 用量在账号视图间共享。
+- Token 账本位于 `pi-quota-monitor/usage/`，仅覆盖插件安装后的消息；不保存提示词或凭据。Reasoning 已计入 Output，不重复累计。
+- 额度读数位于 `quota-readings/`，OAI 逐期记录位于 `codex-periods/`。这两个目录目前不在账号/账本备份中。
+- **账号备份包含 OAuth token**：请保存在私有目录，勿分享或提交。重置本地用量不会重置服务商额度。
+- 配置位于 `~/.pi/agent/pi-quota-monitor/config.json`；`PI_CODING_AGENT_DIR` 可更改 Pi 数据目录。
 
-其他账号命令：`/quota-account-current`、`/quota-account-delete <名称>`、`/quota-account-reset-cache`、`/quota-account-reset-usage <名称>`、`/quota-account-backup [私有目录绝对路径]`、`/quota-account-backups`、`/quota-account-restore <备份路径>`。删除 profile 不会删除历史用量；重置本地用量**不会重置服务商额度**。恢复以合并方式导入，重复导入不会重复计数。
-
-**备份包含 OAuth token。** 自动备份存于插件私有目录，手动指定的目录必须已存在且权限为 `0700`；备份文件权限为 `0600`。备份不会自动删除，请勿分享或提交到仓库。
-
-### 数据与估算
-
-配置位于 `~/.pi/agent/pi-quota-monitor/config.json`（可用 `PI_CODING_AGENT_DIR` 更改 Pi 数据目录）。默认控制台端口为 `38457`，刷新间隔为 180 秒。Token 账本位于 `pi-quota-monitor/usage/usage-YYYY-MM-DD.jsonl`；升级时会自动迁移旧目录中的同名文件。账本只记录**安装本插件后的消息**，不回填以前的 Pi 历史；记录 Token、模型、账号归属和估算金额，不记录提示词或凭据。Reasoning 已包含于 Output，不重复计数。
-
-金额按公开的标准 API 价格估算，**不是订阅实付、余额或预算**。价格表见 [`src/tokens/pricing.ts`](src/tokens/pricing.ts)（核对日期：2026-09-24）。[Google 官方价格](https://ai.google.dev/gemini-api/docs/pricing)中的 Gemini 3.8 Flash 每百万输入 / 输出 / 缓存读取 Token 为 $0.75 / $3.75 / $0.075，适用至 2026-12-31。已有金额的记录保持原值；此前未计价的 3.8 Flash 历史记录会在汇总时补估，原始账本不改写。未知模型、无法可靠计价的记录单独标示。非文本内容、缓存时长、折扣及价格变动可能造成偏差。
-
-周期剩余金额根据**同一额度周期内两次有效读数之间**的本地 Token 消耗和额度下降比例外推；读数不足、额度回升或账本不完整时不外推。其他客户端的消耗也会造成偏差。成功的额度读数单独存于 `quota-readings/`，用于启动时恢复显示；该目录目前不包含在账号与 Token 账本备份中。
-
-### 开发
+### 发布前检查
 
 ```bash
 npm ci
@@ -58,62 +56,56 @@ npm run check
 npm pack --dry-run
 ```
 
-Pi 直接加载 `src/index.ts`；发布包包含 `src/`、README 和 LICENSE。
-
 ## English
 
-Show remaining OpenAI Codex and Antigravity quotas, local token usage, and API-list-price estimates in Pi. Available in the Pi TUI / pi-web status bar, `/quota`, and a local web dashboard.
+View OpenAI Codex / Antigravity quotas and local token usage in Pi's status bar, `/quota`, and a local dashboard.
 
 ### Install
 
-Requires Node.js 22+, a Pi build compatible with `@earendil-works/pi-coding-agent`, and logged-in providers. This package does not perform provider login. Install and sign in to the Antigravity provider separately; local agy mode also requires the `agy` executable.
+Requires Node.js 22+ and credentials for the providers you query. Local Antigravity `agy` mode also requires the `agy` executable.
 
 ```bash
 pi install npm:pi-quota-monitor
 ```
 
-Restart Pi or reload extensions after installation. For repository development, use `pi --extension ./src/index.ts` for a temporary load or `pi install .` for a local package install.
+Restart Pi or reload extensions. For repository development, use `pi --extension ./src/index.ts` or `pi install .`.
 
 ### Commands
 
 | Command | Purpose |
 | --- | --- |
-| `/quota` | Show quotas, resets, and token usage |
-| `/quota-refresh` | Refresh quota readings now |
-| `/quota-interval 180` | Set the refresh interval (60–3600 seconds) |
+| `/quota` | Show quotas, resets, and usage |
+| `/quota-refresh` | Query quotas now |
+| `/quota-interval 180` | Set query interval (60–3600 seconds) |
 | `/quota-console` | Open the local dashboard |
-| `/quota-account-save pro` | Save the current Codex OAuth account |
+| `/quota-account-save <name>` | Save the current Codex OAuth account |
 | `/quota-account-list` | List saved accounts |
-| `/quota-account-use pro` | Switch Codex credentials without replacing the session |
+| `/quota-account-use <name>` | Switch Codex account without replacing the session |
+| `/quota-account-import <name> <local-JSON-path>` | Import a Pi OAuth profile |
 
-The OAI / AGY status-bar percentages are **5-hour / weekly remaining quota**; unknown values appear as `-`. The AGY status bar shows Gemini; see `/quota` or the dashboard for other model groups. Failed queries retain and identify the last successful reading.
+Other account commands: `/quota-account-current`, `/quota-account-backup`, `/quota-account-backups`, `/quota-account-restore`, `/quota-account-delete`, `/quota-account-reset-cache`, and `/quota-account-reset-usage`.
 
-### Dashboard and accounts
+### Display and estimates
 
-The dashboard defaults to `http://127.0.0.1:38457` and listens only on the Pi machine's loopback interface. Use SSH port forwarding for remote access; **do not expose the port to the LAN**. If the port is occupied, a free port is used temporarily. Port-setting changes take effect after restarting Pi. Dashboard polling reads local cached data rather than repeatedly calling quota APIs. The dashboard runs inside the Pi process, not as a separate daemon.
+- OAI / AGY status-bar values are **5-hour / weekly remaining quota**; unknown values show `-`. When countdowns are enabled, OAI's `↻` uses the weekly window for Pro and the 5-hour window for other plans.
+- The dashboard defaults to `http://127.0.0.1:38457` and listens on loopback only. Use SSH forwarding for remote access; do not expose it to the LAN.
+- OAI cards show remaining and current-period total **estimates** side by side. The collapsible period chart tracks 5-hour and weekly windows per Codex account; an observed increase or substantial reset-time change starts a new period.
+- Period cost extrapolates from local Token cost and quota decline between two readings in the same period. Missing samples or prices display `—`, not zero. A reset between queries is detected only at the next observation.
+- Amounts use public API list prices, **not subscription charges, balances, or provider limits**. Other clients' usage can skew estimates. See [`src/tokens/pricing.ts`](src/tokens/pricing.ts).
 
-Log in to Codex with Pi's native `/login`, then save it with `/quota-account-save <name>`; repeat after logging in to another account. You can also import a single Pi OAuth profile with `/quota-account-import <name> <local-JSON-path>`. Switching backs up and syncs the current credential, replaces only the Codex credential, and verifies what Pi resolves at runtime; failed verification rolls back. It **does not create a session or restart Pi**. Do not switch while another Pi process is making requests: processes sharing a Pi data directory also share `auth.json`.
+### Accounts and local data
 
-The dashboard offers overall and per-account Codex ledgers. It follows the new account after a switch unless you deliberately selected a historical ledger. Live Codex quota and period-cost estimates appear only for the active account. Older Codex entries without an account ID appear only in overall totals; Antigravity usage is shared across account views.
+- Log in to Codex with Pi's `/login` before saving or switching accounts. Switching verifies the credential and rolls back on failure; avoid switching while another Pi process sharing `auth.json` is making requests.
+- Live Codex quota is available only for the active account; recorded period estimates remain viewable per historical account. Antigravity usage is shared across account views.
+- Token ledgers in `pi-quota-monitor/usage/` cover messages collected after installation; they do not store prompts or credentials. Reasoning is included in Output, not counted twice.
+- Quota readings live in `quota-readings/`; OAI period records live in `codex-periods/`. Neither is currently included in account/ledger backups.
+- **Account backups contain OAuth tokens**: keep them private. Resetting the local usage ledger does not reset provider quotas.
+- Configuration lives in `~/.pi/agent/pi-quota-monitor/config.json`; `PI_CODING_AGENT_DIR` changes the Pi data directory.
 
-Other account commands: `/quota-account-current`, `/quota-account-delete <name>`, `/quota-account-reset-cache`, `/quota-account-reset-usage <name>`, `/quota-account-backup [absolute-private-directory]`, `/quota-account-backups`, and `/quota-account-restore <backup-path>`. Deleting a profile preserves usage history; resetting local usage **does not reset provider quotas**. Restores merge records without double-counting repeated imports.
-
-**Backups contain OAuth tokens.** Automatic backups live in the plugin's private directory. A custom destination must already exist with `0700` permissions; backup files use `0600`. Backups are not automatically deleted. Never share or commit them.
-
-### Data and estimates
-
-Configuration is stored in `~/.pi/agent/pi-quota-monitor/config.json` (`PI_CODING_AGENT_DIR` can change Pi's data directory). The default dashboard port is `38457` and refresh interval is 180 seconds. Token ledgers live at `pi-quota-monitor/usage/usage-YYYY-MM-DD.jsonl`; existing root-level ledgers are migrated on upgrade. They cover **messages recorded after installation only**, not older Pi history. It stores token counts, model, account attribution, and estimated cost—not prompts or credentials. Reasoning tokens are included in Output and are not counted twice.
-
-Costs estimate public standard API list prices, **not subscription charges, balances, or budgets**. See [`src/tokens/pricing.ts`](src/tokens/pricing.ts) (checked 2026-09-24). [Google's published price](https://ai.google.dev/gemini-api/docs/pricing) for Gemini 3.8 Flash is $0.75 / $3.75 / $0.075 per million input / output / cache-read tokens through 2026-12-31. Saved amounts remain unchanged. Previously unpriced 3.8 Flash records are estimated during aggregation without rewriting the ledger. Unknown or unsupported usage remains marked unpriced. Non-text usage, cache-storage duration, discounts, and historical price changes can affect accuracy.
-
-Remaining-period cost extrapolates from local token use and quota decline **between two valid readings in the same reset period**. It is withheld when readings are insufficient, quota rises, or the ledger is incomplete; usage from other clients can also distort it. Successful quota readings are stored separately in `quota-readings/` for startup recovery; that directory is not currently included in account/token-ledger backups.
-
-### Development
+### Pre-publish checks
 
 ```bash
 npm ci
 npm run check
 npm pack --dry-run
 ```
-
-Pi loads `src/index.ts` directly. The published package includes `src/`, README, and LICENSE.

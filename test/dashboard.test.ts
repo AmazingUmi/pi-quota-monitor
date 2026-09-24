@@ -34,11 +34,15 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const page = await fetch(origin);
   expect(page.status).toBe(200);
   expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
+  expect(page.headers.get("Content-Security-Policy")).toContain("img-src 'self'");
   const html = await page.text();
   expect(html).toContain("概览");
   expect(html).toContain("Token 与金额消耗趋势");
   expect(html).toContain('id="cost-chart"');
   expect(html).toContain('id="cost-chart-summary"');
+  expect(html).toContain('id="codex-period-chart"');
+  expect(html).toContain('<details id="codex-period-details"');
+  expect(html).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg">');
   expect(html).toContain("chart-model");
   expect(html).toContain("usage-account");
   expect([...html.matchAll(/<section class="section /g)]).toHaveLength(4);
@@ -82,6 +86,10 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(css).toContain(".trend-grid");
   expect(css).toContain(":focus-visible");
   expect(css).toContain(".quota-money");
+  const favicon = await fetch(`${origin}/favicon.svg`);
+  expect(favicon.status).toBe(200);
+  expect(favicon.headers.get("Content-Type")).toContain("image/svg+xml");
+  expect(await favicon.text()).toContain(">π</text>");
   const js = await fetch(`${origin}/client.js`);
   expect(js.status).toBe(200);
   const client = await js.text();
@@ -145,6 +153,19 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   await dashboard.stop();
   running.pop();
   await expect(fetch(`${origin}/api/state`)).rejects.toThrow();
+});
+
+it("exposes only allowlisted account-scoped OAI period fields", async () => {
+  const dashboard = new QuotaDashboard({
+    state: () => ({ ...state, codexPeriods: [{ id: "weekly:1000", kind: "weekly", startedAt: 1000, lastAt: 2000,
+      remainingPercent: 60, estimatedTotalUsd: 80, credential: "must-not-leak" }] as unknown as DashboardState["codexPeriods"] }),
+    refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, setPort: async () => {},
+  });
+  running.push(dashboard);
+  const origin = await dashboard.start(0);
+  const response = await (await fetch(`${origin}/api/state`)).json() as DashboardState;
+  expect(response.codexPeriods).toMatchObject([{ id: "weekly:1000", estimatedTotalUsd: 80 }]);
+  expect(JSON.stringify(response)).not.toContain("must-not-leak");
 });
 
 it("queues only allowlisted account commands behind the dashboard control check", async () => {

@@ -47,7 +47,10 @@ export function formatStatus(
 ): string {
   const geminiFiveHour = geminiTimedWindow(antigravity.value, "fiveHour");
   const geminiWeekly = geminiTimedWindow(antigravity.value, "weekly");
-  const codexReset = showReset ? countdown(codex.value?.fiveHour?.resetAt, now) : undefined;
+  const codexReset = showReset ? countdown(
+    codex.value?.plan?.toLowerCase() === "pro" ? codex.value.weekly?.resetAt : codex.value?.fiveHour?.resetAt,
+    now,
+  ) : undefined;
   const geminiReset = showReset ? countdown(geminiFiveHour?.resetAt, now) : undefined;
   const parts: string[] = [];
   if (visibility.showOai !== false) {

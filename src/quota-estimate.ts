@@ -18,6 +18,7 @@ export function estimateQuotaAmount(
   costForPeriod: (startAt: number, endAt: number) => PeriodCostSummary,
   now = Date.now(),
   ledgerStale = false,
+  observedPeriod = false,
 ): QuotaAmountEstimate {
   const sorted = [...new Map(readings.filter((r) => Number.isFinite(r.capturedAt) && r.capturedAt <= now)
     .map((r) => [r.capturedAt, r])).values()].sort((a, b) => a.capturedAt - b.capturedAt);
@@ -28,12 +29,13 @@ export function estimateQuotaAmount(
   if (window.resetAt === undefined || !Number.isFinite(window.resetAt)) return { note: "缺少本周期重置时间，无法匹配读数。" };
   if (window.resetAt <= now) return { note: "额度窗口已到重置时间，请刷新额度后查看估算。" };
   let baseline = latest!;
-  // Do not cross a reset, missing observation, quota increase, or duplicated timestamp.
+  // Codex uses observed boundaries; keep the nominal-duration guard for other providers.
   for (let i = sorted.length - 2; i >= 0; i--) {
     const prior = sorted[i];
     const w = prior.window;
     if (!w || !Number.isFinite(w.remainingPercent) || w.resetAt === undefined
-      || Math.abs(w.resetAt - window.resetAt) > 60_000 || prior.capturedAt < window.resetAt - durationMs
+      || Math.abs(w.resetAt - window.resetAt) > 60_000
+      || (!observedPeriod && prior.capturedAt < window.resetAt - durationMs)
       || prior.capturedAt >= baseline.capturedAt || w.resetAt <= baseline.capturedAt
       || w.remainingPercent < baseline.window!.remainingPercent) break;
     baseline = prior;
@@ -64,7 +66,7 @@ export function quotaAmountEstimates(
   const agySamples = antigravity.value ? [...agyHistory.filter((q) => q.capturedAt < antigravity.value!.capturedAt), antigravity.value] : [];
   const codexEstimate = (key: "fiveHour" | "weekly", duration: number) => estimateQuotaAmount(
     codexSamples.map((q) => ({ capturedAt: q.capturedAt, window: q.plan === codex.value?.plan ? q[key] : undefined })), duration,
-    (start, end) => aggregator.estimateCostForPeriod("openai-codex", start, end), now, stale);
+    (start, end) => aggregator.estimateCostForPeriod("openai-codex", start, end), now, stale, true);
   return {
     codex: { fiveHour: codexEstimate("fiveHour", (codex.value?.fiveHour?.windowMinutes ?? 300) * 60_000),
       weekly: codexEstimate("weekly", (codex.value?.weekly?.windowMinutes ?? 10080) * 60_000) },

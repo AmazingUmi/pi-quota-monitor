@@ -214,6 +214,9 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const refreshResponse = await fetch(`${url}/api/refresh`, { method: "POST", headers });
   expect(refreshResponse.status).toBe(200);
   expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
+  const periodState = await (await fetch(`${url}/api/state`)).json() as { codexPeriods: Array<{ kind: string; estimatedTotalUsd?: number }> };
+  expect(periodState.codexPeriods.map((period) => period.kind).sort()).toEqual(["fiveHour", "weekly"]);
+  expect(periodState.codexPeriods.every((period) => period.estimatedTotalUsd === undefined)).toBe(true);
   const callsBeforeNamedRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
   await commands.get("quota-refresh")?.("", ctx);
   expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeNamedRefresh);

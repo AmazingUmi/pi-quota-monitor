@@ -37,6 +37,55 @@ it("renders quota meters, compact totals, and distinct low-quota states", async 
   expect(get("cost-chart").getAttribute("aria-label")).toContain("估算金额");
 });
 
+it("shows OAI total alongside remaining estimates and charts recorded periods without zero-filling gaps", async () => {
+  const { get, dom, state, reload } = await mount();
+  const amounts = get("codex-windows").querySelector(".quota-money-values")!;
+  expect(amounts.textContent).toContain("剩余估算$34.07");
+  expect(amounts.textContent).toContain("当期总金额估算$46.67");
+  expect(get("codex-windows").querySelector("summary")?.textContent).toBe("查看估算依据");
+  expect(get("agy-windows").querySelector(".quota-money-values")).toBeNull();
+  expect(get("codex-period-chart").querySelectorAll("circle")).toHaveLength(2);
+  expect(get("codex-period-chart").querySelectorAll(".period-active")).toHaveLength(1);
+  expect(get("codex-period-chart").querySelector(".chart-line")).toBeNull();
+  expect(get("codex-period-summary").textContent).toContain("3 期 · 2 期有估算");
+  get<HTMLSelectElement>("codex-period-kind").value = "fiveHour";
+  get("codex-period-kind").dispatchEvent(new dom.window.Event("change"));
+  expect(get("codex-period-chart").querySelector(".empty-state")?.textContent).toContain("尚无此账号");
+  state.selectedAccountId = "all";
+  state.codexPeriods = [];
+  await reload();
+  expect(get("codex-windows").querySelector("details")).toBeNull();
+  expect(get("codex-period-chart").querySelector("circle")).toBeNull();
+});
+
+it("keeps the OAI period chart collapsed by default and preserves disclosure state on polling", async () => {
+  const { get, state, reload } = await mount();
+  const disclosure = get<HTMLDetailsElement>("codex-period-details");
+  expect(disclosure.open).toBe(false);
+  expect(disclosure.querySelector("summary")?.textContent).toContain("OAI 当期总金额估算 · 逐期变化");
+  disclosure.open = true;
+  expect(get("codex-period-chart").querySelector("svg")).not.toBeNull();
+  state.codexPeriods![0].estimatedTotalUsd = 45;
+  await reload();
+  expect(disclosure.open).toBe(true);
+  disclosure.open = false;
+  await reload();
+  expect(disclosure.open).toBe(false);
+});
+
+it("keeps both OAI amount labels visible while estimates are unavailable", async () => {
+  const state = dashboardFixture();
+  state.quotaEstimates.codex.weekly = { note: "等待同一周期的第二次额度读数。" };
+  const { get, reload } = await mount(state);
+  const weekly = get("codex-windows").querySelector(".quota-window")!;
+  expect(weekly.querySelector(".quota-money-values")?.textContent).toBe("剩余估算—当期总金额估算—");
+  expect(weekly.textContent).toContain("等待同一周期的第二次额度读数");
+  expect(weekly.querySelector("details")).toBeNull();
+  state.quotaEstimates.codex.weekly = dashboardFixture().quotaEstimates.codex.weekly;
+  await reload();
+  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("当期总金额估算$46.67");
+});
+
 it("preserves open amount details and focus across unchanged and changed cache polls", async () => {
   const { get, dom, state, reload } = await mount();
   const details = get("codex-windows").querySelector("details")!;
