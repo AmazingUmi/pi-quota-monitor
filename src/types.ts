@@ -66,9 +66,15 @@ export interface QuotaAmountEstimate {
   note: string;
   observedCostUsd?: number;
   observedTokens?: number;
+  /** Bounds of included adjacent sample intervals; gaps within the bounds are excluded. */
   sampleStartAt?: number;
   sampleEndAt?: number;
-  /** Percentage-point drop between recorded observations, not the whole cycle's used percentage. */
+  sampleIntervals?: number;
+  /** Count of observed quota declines represented by those intervals. */
+  quotaChanges?: number;
+  /** Local tokens since the last weekly decline, awaiting a matching quota observation. */
+  pendingTokens?: number;
+  /** Sum of included intervals' percentage-point drops, not the whole cycle's used percentage. */
   usedPercent?: number;
   /** Independently verified Pi-attributed percentage-point consumption, if supplied. */
   piAttributedPercent?: number;

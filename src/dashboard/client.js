@@ -128,7 +128,7 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
     const detail = document.createElement("p");
     if (estimated) {
       summary.textContent = showTotal ? "查看估算依据" : `${estimate.attribution === "correlated" ? "剩余条件估算" : "剩余估算"} ${money(estimate.estimatedRemainingUsd)}`;
-      const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ` : "";
+      const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ${estimate.sampleIntervals ?? 1} 个合格区间${estimate.quotaChanges ? ` / ${estimate.quotaChanges} 次额度下降` : ""}（范围内可能有排除区间） · ` : "";
       const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
       detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
     } else {
@@ -141,7 +141,7 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
   if (estimate && !notApplicable && (estimate.unpricedRecords || estimate.ledgerStale)) {
     const warning = document.createElement("small");
     warning.className = "quota-estimate-note";
-    warning.textContent = [estimate.unpricedRecords ? `${estimate.unpricedRecords} 条未计价，金额可能偏低` : "", estimate.ledgerStale ? "账本汇总已过期" : ""].filter(Boolean).join(" · ");
+    warning.textContent = [estimate.unpricedRecords ? `${estimate.unpricedRecords} 条未计价，相关区间未用于校准` : "", estimate.ledgerStale ? "账本汇总已过期" : ""].filter(Boolean).join(" · ");
     container.append(warning);
   }
   parent.append(container);
@@ -415,7 +415,7 @@ function renderCodexPeriodChart() {
       svg.append(svgElement("line", { x1: x, x2: x, y1: bottom, y2: y, class: "period-stem" }));
       const marker = svgElement("circle", { cx: x, cy: y, r: 4, class: period.closedAt ? "chart-point" : "period-active" });
       const boundary = { increase: "额度增加", "reset-time": "重置时间变化", "plan-change": "套餐变化" }[period.boundary] ?? "";
-      marker.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · ${period.closedAt ? "已观察到下一期" : "尚未观察到下一期"} · ${period.attribution === "correlated" ? "条件估算（同区间可能有外部消耗）" : "总金额估算"} ${money(value)}${boundary ? ` · 下一期触发：${boundary}` : ""}`));
+      marker.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · ${period.closedAt ? "已观察到下一期" : "尚未观察到下一期"} · ${period.attribution === "correlated" ? "条件估算（同区间可能有外部消耗）" : "总金额估算"} ${money(value)}${period.sampleIntervals ? ` · 累计 ${period.sampleIntervals} 个账本区间` : ""}${period.quotaChanges ? ` / ${period.quotaChanges} 次额度下降` : ""}${period.excludedIntervals ? ` · 排除 ${period.excludedIntervals} 个无 Pi 用量区间` : ""}${boundary ? ` · 下一期触发：${boundary}` : ""}`));
       svg.append(marker);
     }
     if (index === 0 || index === periods.length - 1 || index % Math.max(1, Math.ceil(periods.length / 5)) === 0) {

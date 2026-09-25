@@ -193,9 +193,9 @@ export class QuotaDashboard {
             .flatMap((kind) => codexPeriods.filter((period) => period.kind === kind).slice(-24))
             .sort((a, b) => a.startedAt - b.startedAt)
             .map(({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, attribution }) =>
+              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, sampleIntervals, quotaChanges, excludedIntervals, attribution }) =>
             ({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, attribution })),
+              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, sampleIntervals, quotaChanges, excludedIntervals, attribution })),
           dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
           config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
             showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));

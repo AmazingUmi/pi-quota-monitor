@@ -300,10 +300,13 @@ it("normalizes and orders OAI/AGY windows without detaching their estimates or i
 it("labels correlated quota amounts as conditional rather than verified Pi attribution", async () => {
   const state = dashboardFixture();
   state.quotaEstimates.codex.weekly.attribution = "correlated";
+  state.quotaEstimates.codex.weekly.sampleIntervals = 2;
+  state.quotaEstimates.codex.weekly.excludedIntervals = 1;
   state.quotaEstimates.codex.weekly.note = "同区间仍可能有外部消耗";
   const { get } = await mount(state);
   expect(get("codex-windows").textContent).toContain("当期总金额条件估算");
   expect(get("codex-windows").textContent).toContain("账号额度下降");
+  expect(get("codex-windows").textContent).toContain("2 个合格区间");
   expect(get("codex-windows").textContent).toContain("同区间仍可能有外部消耗");
 });
 

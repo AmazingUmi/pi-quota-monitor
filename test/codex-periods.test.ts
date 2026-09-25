@@ -40,11 +40,12 @@ it("persists explicitly labeled conditional quotes without claiming verified Pi 
   const quote: QuotaAmountEstimates["codex"] = {
     fiveHour: { note: "unavailable" },
     weekly: { note: "conditional", attribution: "correlated", calibrationPercent: 10,
-      estimatedPeriodUsd: 80, sampleStartAt: start, sampleEndAt: start + 60_000, usedPercent: 10 },
+      estimatedPeriodUsd: 80, sampleStartAt: start, sampleEndAt: start + 60_000,
+      sampleIntervals: 1, excludedIntervals: 1, usedPercent: 10 },
   };
   const periods = advanceCodexPeriods([], readings, quote);
   expect(periods.find((p) => p.kind === "weekly")).toMatchObject({ attribution: "correlated",
-    calibrationPercent: 10, estimatedTotalUsd: 80 });
+    calibrationVersion: 2, calibrationPercent: 10, sampleIntervals: 1, excludedIntervals: 1, estimatedTotalUsd: 80 });
   expect(periods.find((p) => p.kind === "weekly")?.piAttributedPercent).toBeUndefined();
   expect(advanceCodexPeriods(periods, readings, quote)).toEqual(periods);
   const later = advanceCodexPeriods(periods, [...readings, quota(start + 120_000, 70)], quote);
@@ -54,8 +55,17 @@ it("persists explicitly labeled conditional quotes without claiming verified Pi 
   const store = new CodexPeriodStore("conditional-account", root);
   await store.update([...readings, quota(start + 120_000, 70)], quote);
   expect((await store.load()).find((p) => p.kind === "weekly")).toMatchObject({
-    attribution: "correlated", calibrationPercent: 10, estimatedTotalUsd: 80,
+    attribution: "correlated", calibrationPercent: 10, sampleIntervals: 1, excludedIntervals: 1, estimatedTotalUsd: 80,
   });
+});
+
+it("invalidates pre-plateau weekly quotes but preserves current-calibration snapshots", () => {
+  const old = { ...advanceCodexPeriods([], [quota(start, 80)])[1], estimatedTotalUsd: 80,
+    attribution: "correlated" as const, calibrationPercent: 10, sampleIntervals: 1 };
+  const migrated = advanceCodexPeriods([old], [quota(start + 60_000, 79)]);
+  expect(migrated[0].estimatedTotalUsd).toBeUndefined();
+  expect(migrated[0].attribution).toBeUndefined();
+  expect(migrated[0].sampleIntervals).toBeUndefined();
 });
 
 it("removes legacy quotes that lack independent Pi attribution", () => {
