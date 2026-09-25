@@ -46,6 +46,9 @@ export interface TokenUsageRecord extends TokenTotals {
   provider: string;
   model: string;
   accountId?: string;
+  source?: "pi-message" | "pi-subagents";
+  sessionId?: string;
+  runId?: string;
   /** Public API equivalent cost frozen when this record was collected, not subscription billing. */
   estimatedCostUsd?: number;
   pricingAsOf?: string;
@@ -67,6 +70,9 @@ export interface QuotaAmountEstimate {
   sampleEndAt?: number;
   /** Percentage-point drop between recorded observations, not the whole cycle's used percentage. */
   usedPercent?: number;
+  /** Independently verified Pi-attributed percentage-point consumption. Never inferred from account readings. */
+  piAttributedPercent?: number;
+  contaminated?: boolean;
   estimatedPeriodUsd?: number;
   estimatedRemainingUsd?: number;
   unpricedRecords?: number;

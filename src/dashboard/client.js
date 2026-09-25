@@ -561,6 +561,7 @@ function render() {
   const tokens = $("tokens");
   tokens.replaceChildren();
   if (usage.stale) notice(tokens, usage.error || "Token 汇总已过期，显示上次有效结果");
+  if (usage.childUsageIncomplete) notice(tokens, "部分 subagent 用量缺少可读的模型会话或运行元数据；已知 CLI 汇总记为未计价，Token 总量可能偏低。");
   if (usage.invalidRecords) notice(tokens, `已跳过 ${usage.invalidRecords.toLocaleString()} 条损坏记录。`);
   if (pricing.unpricedRecords) notice(tokens, `${pricing.unpricedRecords.toLocaleString()} 条用量没有可靠价格，估算费用未覆盖这些记录。`);
   if (!usage.records) notice(tokens, "暂无本插件记录的 Token 用量。", true);

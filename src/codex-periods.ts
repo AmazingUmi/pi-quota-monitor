@@ -22,6 +22,7 @@ export interface CodexPeriod {
   sampleStartAt?: number;
   sampleEndAt?: number;
   usedPercent?: number;
+  piAttributedPercent?: number;
 }
 
 const KINDS: CodexPeriodKind[] = ["fiveHour", "weekly"];
@@ -42,7 +43,8 @@ function valid(row: unknown): row is CodexPeriod {
     && (p.estimateAsOf === undefined || finite(p.estimateAsOf))
     && (p.sampleStartAt === undefined || finite(p.sampleStartAt))
     && (p.sampleEndAt === undefined || finite(p.sampleEndAt))
-    && (p.usedPercent === undefined || finite(p.usedPercent));
+    && (p.usedPercent === undefined || finite(p.usedPercent))
+    && (p.piAttributedPercent === undefined || (finite(p.piAttributedPercent) && p.piAttributedPercent > 0));
 }
 
 /** Any observed increase starts a new period, even if the advertised reset time did not change. */
@@ -57,7 +59,14 @@ export function periodBoundary(prior: { remainingPercent: number; resetAt?: numb
 export function advanceCodexPeriods(
   existing: CodexPeriod[], readings: CodexQuota[], estimates?: QuotaAmountEstimates["codex"],
 ): CodexPeriod[] {
-  const periods = existing.map((p) => ({ ...p }));
+  // Pre-attribution versions stored quotes calibrated against account-wide deltas.
+  // They cannot be trusted when another client used the same OAuth account.
+  const periods = existing.map((p) => {
+    if (p.piAttributedPercent !== undefined) return { ...p };
+    const { estimatedTotalUsd: _old, estimateAsOf: _at,
+      sampleStartAt: _start, sampleEndAt: _end, usedPercent: _drop, ...safe } = p;
+    return { ...safe } as CodexPeriod;
+  });
   const lastByKind = new Map(KINDS.map((kind) => [kind, [...periods].reverse().find((p) => p.kind === kind)] as const));
   const sorted = [...new Map(readings.filter((q) => finite(q.capturedAt) && q.capturedAt > 0).map((q) => [q.capturedAt, q])).values()]
     .sort((a, b) => a.capturedAt - b.capturedAt);
@@ -89,12 +98,14 @@ export function advanceCodexPeriods(
     const estimate: QuotaAmountEstimate = estimates[kind];
     if (period && !period.closedAt && latest[kind] && period.lastAt === latest.capturedAt
       && estimate.sampleEndAt === latest.capturedAt && finite(estimate.estimatedPeriodUsd)
-      && estimate.estimatedPeriodUsd >= 0 && finite(estimate.sampleStartAt) && finite(estimate.usedPercent)) {
+      && estimate.estimatedPeriodUsd >= 0 && finite(estimate.sampleStartAt) && finite(estimate.usedPercent)
+      && finite(estimate.piAttributedPercent) && estimate.piAttributedPercent > 0) {
       period.estimatedTotalUsd = estimate.estimatedPeriodUsd;
       period.estimateAsOf = latest.capturedAt;
       period.sampleStartAt = estimate.sampleStartAt;
       period.sampleEndAt = estimate.sampleEndAt;
       period.usedPercent = estimate.usedPercent;
+      period.piAttributedPercent = estimate.piAttributedPercent;
     }
   }
   return periods.slice(-MAX_PERIODS);
@@ -111,6 +122,15 @@ export class CodexPeriodStore {
   }
 
   async load(): Promise<CodexPeriod[]> {
+    return this.readPeriods().then((periods) => periods.map((p) => {
+      if (p.piAttributedPercent !== undefined) return p;
+      const { estimatedTotalUsd: _old, estimateAsOf: _at, sampleStartAt: _start,
+        sampleEndAt: _end, usedPercent: _drop, ...safe } = p;
+      return safe;
+    }));
+  }
+
+  private async readPeriods(): Promise<CodexPeriod[]> {
     try {
       const file = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
@@ -121,9 +141,9 @@ export class CodexPeriodStore {
         const rows = (value as { periods?: unknown }).periods;
         if (!Array.isArray(rows) || rows.length > MAX_PERIODS || !rows.every(valid)) throw new Error("Invalid period history");
         return rows.map(({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-          estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent }: CodexPeriod) =>
+          estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent }: CodexPeriod) =>
           ({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-            estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent }));
+            estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent }));
       } finally { await file.close(); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
@@ -136,7 +156,7 @@ export class CodexPeriodStore {
     const release = await lockfile.lock(this.directory, { realpath: false, retries: { retries: 5, minTimeout: 20 }, stale: 30_000 });
     const tmp = join(this.directory, `${randomUUID()}.tmp`);
     try {
-      const before = await this.load();
+      const before = await this.readPeriods();
       const after = advanceCodexPeriods(before, readings, estimates);
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         await writeFile(tmp, JSON.stringify({ version: 1, periods: after }) + "\n", { mode: 0o600, flag: "wx" });

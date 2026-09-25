@@ -47,15 +47,19 @@ it("sums per-record API-price estimates and keeps unknown models unpriced", asyn
   await writeFile(path, line({ ...entry(day, "openai-codex", "gpt-6-sol"), input: 1_000_000, output: 100_000, reasoning: 50_000,
     cacheRead: 200_000, cacheWrite: 0, totalTokens: 1_300_000 })
     + line({ ...entry(day, "antigravity", "gemini-3.8-flash"), input: 10_000, output: 1000, reasoning: 0, cacheRead: 20_000, cacheWrite: 0, totalTokens: 11_000, pricingAsOf: "2026-09-23" })
+    + line({ ...entry(day, "google-vertex", "gemini-3.8-flash"), input: 10_000, output: 1000, reasoning: 0, cacheRead: 20_000, cacheWrite: 0, totalTokens: 11_000, pricingAsOf: "2026-09-23" })
     + line(entry(day, "antigravity", "unknown")));
   const aggregator = new UsageAggregator(dir);
   await aggregator.refresh();
   const { pricing, models } = aggregator.state();
-  expect(pricing).toMatchObject({ pricedRecords: 2, unpricedRecords: 1, unpricedTokens: 17 });
+  expect(pricing).toMatchObject({ pricedRecords: 3, unpricedRecords: 1, unpricedTokens: 17 });
   const gptCost = (1_000_000 * 4 + 200_000 * 0.4 + 100_000 * 15) / 1e6;
   const geminiCost = (10_000 * 0.75 + 20_000 * 0.075 + 1000 * 3.75) / 1e6;
-  expect(pricing.estimatedCostUsd).toBeCloseTo(gptCost + geminiCost);
-  expect(models.find((item) => item.model === "gemini-3.8-flash")).toMatchObject({ pricedRecords: 1, unpricedRecords: 0, estimatedCostUsd: geminiCost });
+  expect(pricing.estimatedCostUsd).toBeCloseTo(gptCost + 2 * geminiCost);
+  expect(models.filter((item) => item.model === "gemini-3.8-flash")).toEqual(expect.arrayContaining([
+    expect.objectContaining({ provider: "antigravity", pricedRecords: 1, unpricedRecords: 0, estimatedCostUsd: geminiCost }),
+    expect.objectContaining({ provider: "google-vertex", pricedRecords: 1, unpricedRecords: 0, estimatedCostUsd: geminiCost }),
+  ]));
   expect(models.find((item) => item.model === "unknown")).toMatchObject({ pricedRecords: 0, unpricedRecords: 1, estimatedCostUsd: 0 });
   await aggregator.refresh();
   expect(aggregator.state().pricing).toEqual(pricing);

@@ -19,6 +19,7 @@ export function estimateQuotaAmount(
   now = Date.now(),
   ledgerStale = false,
   observedPeriod = false,
+  attributedQuota?: (startAt: number, endAt: number, accountDrop: number) => number | undefined,
 ): QuotaAmountEstimate {
   const sorted = [...new Map(readings.filter((r) => Number.isFinite(r.capturedAt) && r.capturedAt <= now)
     .map((r) => [r.capturedAt, r])).values()].sort((a, b) => a.capturedAt - b.capturedAt);
@@ -49,10 +50,16 @@ export function estimateQuotaAmount(
   if (!cost.pricedRecords || cost.estimatedCostUsd <= 0) return { ...observed, note: "两次读数之间没有正金额的可计价记录，无法外推金额。" };
   if (usedPercent <= 0) return { ...observed, note: "记录区间内额度尚未下降，等待新的读数后估算。" };
   if (ledgerStale || cost.unpricedRecords) return { ...observed, note: ledgerStale ? "账本汇总已过期，暂不外推金额。" : "记录区间含未计价用量，暂不外推金额。" };
-  const estimatedPeriodUsd = cost.estimatedCostUsd / (usedPercent / 100);
+  // An account reading is not attribution evidence: Codex CLI and other Pi processes
+  // can consume the same window. Only independently verified Pi quota may calibrate.
+  const attributed = attributedQuota?.(baseline.capturedAt, latest!.capturedAt, usedPercent);
+  if (attributed === undefined || !Number.isFinite(attributed) || attributed <= 0 || attributed > usedPercent) {
+    return { ...observed, contaminated: true, note: "账号额度变化可能包含外部客户端用量；缺少独立的 Pi 归因证据，此区间不用于金额校准。" };
+  }
+  const estimatedPeriodUsd = cost.estimatedCostUsd / (attributed / 100);
   if (!Number.isFinite(estimatedPeriodUsd)) return { ...observed, note: "额度变化过小，暂不外推金额。" };
-  return { ...observed, estimatedPeriodUsd, estimatedRemainingUsd: estimatedPeriodUsd * window.remainingPercent / 100,
-    note: "按读数时间区间内已记录的 Token、金额和额度下降量估算；其他客户端的消耗会造成偏差。" };
+  return { ...observed, piAttributedPercent: attributed, estimatedPeriodUsd, estimatedRemainingUsd: estimatedPeriodUsd * window.remainingPercent / 100,
+    note: "按已核实的 Pi 归因额度和本地公开 API 单价换算；非账户实际账单。" };
 }
 
 export function quotaAmountEstimates(

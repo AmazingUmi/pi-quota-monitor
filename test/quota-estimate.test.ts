@@ -11,12 +11,23 @@ it("uses only observed percentage-point changes and costs within the recorded ti
   const from = now - 3600_000;
   const end = now - 60_000;
   const costForPeriod = vi.fn(() => cost);
-  const result = estimateQuotaAmount([sample(from, 70), sample(end, 60)], FIVE_HOURS_MS, costForPeriod, now);
+  const result = estimateQuotaAmount([sample(from, 70), sample(end, 60)], FIVE_HOURS_MS, costForPeriod, now, false, false,
+    () => 10);
   expect(costForPeriod).toHaveBeenCalledExactlyOnceWith(from, end);
-  expect(result).toMatchObject({ observedCostUsd: 8, observedTokens: 1000, usedPercent: 10,
+  expect(result).toMatchObject({ observedCostUsd: 8, observedTokens: 1000, usedPercent: 10, piAttributedPercent: 10,
     estimatedPeriodUsd: 80, estimatedRemainingUsd: 48, sampleStartAt: from, sampleEndAt: end });
   // The old algorithm would divide by all 40% consumed, including time before installation.
   expect(result.estimatedPeriodUsd).not.toBe(20);
+});
+
+it("rejects account-wide quota drops unless Pi attribution is independently verified", () => {
+  const readings = [sample(now - 3600_000, 70), sample(now, 60)];
+  const unverified = estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now);
+  expect(unverified).toMatchObject({ usedPercent: 10, observedCostUsd: 8, contaminated: true });
+  expect(unverified.estimatedPeriodUsd).toBeUndefined();
+  expect(estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now, false, false, () => 12).contaminated).toBe(true);
+  const verified = estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now, false, false, () => 4);
+  expect(verified).toMatchObject({ usedPercent: 10, piAttributedPercent: 4, estimatedPeriodUsd: 200 });
 });
 
 it("recognizes supported Antigravity windows without inventing other periods", () => {
@@ -45,7 +56,7 @@ it("never crosses a reset or quota increase and accepts small reset timestamp ro
   expect(estimate([sample(now - 3600_000, 50), sample(now, 60)]).estimatedPeriodUsd).toBeUndefined();
   const result = estimate([sample(now - 7200_000, 40), sample(now - 3600_000, 70), sample(now, 60, resetAt + 1000)]);
   expect(result.sampleStartAt).toBe(now - 3600_000);
-  expect(result.estimatedRemainingUsd).toBe(48);
+  expect(result.contaminated).toBe(true);
 });
 
 it("recalibrates after an early manual increase without crossing into the old OAI period", () => {
@@ -53,7 +64,7 @@ it("recalibrates after an early manual increase without crossing into the old OA
   const reset = sample(now - 120_000, 95);
   const after = sample(now - 60_000, 85);
   const periodCost = vi.fn(() => cost);
-  const result = estimateQuotaAmount([before, reset, after], ONE_WEEK_MS, periodCost, now, false, true);
+  const result = estimateQuotaAmount([before, reset, after], ONE_WEEK_MS, periodCost, now, false, true, () => 10);
   expect(periodCost).toHaveBeenCalledExactlyOnceWith(reset.capturedAt, after.capturedAt);
   expect(result).toMatchObject({ sampleStartAt: reset.capturedAt, estimatedPeriodUsd: 80 });
 });
@@ -61,7 +72,7 @@ it("recalibrates after an early manual increase without crossing into the old OA
 it("estimates within an unusually long OAI period without assuming exactly 7 days", () => {
   const earlier = sample(now - 7 * 86_400_000, 70, now + 3_600_000);
   const later = sample(now, 60, now + 3_600_000);
-  const estimate = estimateQuotaAmount([earlier, later], FIVE_HOURS_MS, () => cost, now, false, true);
+  const estimate = estimateQuotaAmount([earlier, later], FIVE_HOURS_MS, () => cost, now, false, true, () => 10);
   expect(estimate).toMatchObject({ sampleStartAt: earlier.capturedAt, estimatedPeriodUsd: 80, estimatedRemainingUsd: 48 });
 });
 

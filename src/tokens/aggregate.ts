@@ -23,6 +23,7 @@ export interface UsageSummary {
   pricing: { asOf: string; estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number; unpricedTokens: number };
   records: number;
   invalidRecords: number;
+  childUsageIncomplete?: boolean;
   updatedAt?: number;
   stale: boolean;
   error?: string;

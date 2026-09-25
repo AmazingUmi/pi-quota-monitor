@@ -14,7 +14,7 @@ const quota = (capturedAt: number, weekly: number, fiveHour = 80, reset = resetA
   fiveHour: { label: "5h", remainingPercent: fiveHour, resetAt: start + 5 * 3_600_000 },
 });
 const estimates = (end: number, total: number): QuotaAmountEstimates["codex"] => ({
-  weekly: { note: "estimated", estimatedPeriodUsd: total, sampleStartAt: start, sampleEndAt: end, usedPercent: 10 },
+  weekly: { note: "estimated", estimatedPeriodUsd: total, sampleStartAt: start, sampleEndAt: end, usedPercent: 10, piAttributedPercent: 10 },
   fiveHour: { note: "unavailable" },
 });
 
@@ -28,11 +28,17 @@ it("splits early/manual increases even with unchanged resetAt and keeps independ
   expect(periods.find((p) => p.kind === "weekly" && p.startedAt === start)).toMatchObject({ closedAt: start + 120_000, boundary: "increase", estimatedTotalUsd: 80 });
   expect(periods.find((p) => p.kind === "weekly" && p.startedAt === start + 120_000)?.estimatedTotalUsd).toBeUndefined();
   const next = advanceCodexPeriods(periods, [quota(start + 180_000, 80)], {
-    weekly: { note: "estimated", estimatedPeriodUsd: 120, sampleStartAt: start + 120_000, sampleEndAt: start + 180_000, usedPercent: 20 },
+    weekly: { note: "estimated", estimatedPeriodUsd: 120, sampleStartAt: start + 120_000, sampleEndAt: start + 180_000, usedPercent: 20, piAttributedPercent: 20 },
     fiveHour: { note: "unavailable" },
   });
   expect(next.find((p) => p.kind === "weekly" && !p.closedAt)?.estimatedTotalUsd).toBe(120);
   expect(advanceCodexPeriods(next, [quota(start + 180_000, 80)], estimates(start + 60_000, 80))).toEqual(next);
+});
+
+it("removes legacy quotes that lack independent Pi attribution", () => {
+  const legacy = { ...advanceCodexPeriods([], [quota(start, 80)])[0], estimatedTotalUsd: 80, usedPercent: 10 };
+  const next = advanceCodexPeriods([legacy], [quota(start + 60_000, 70)]);
+  expect(next[0].estimatedTotalUsd).toBeUndefined();
 });
 
 it("splits on a moved reset timestamp or plan change without requiring a fixed 5h/7d interval", () => {
@@ -43,6 +49,21 @@ it("splits on a moved reset timestamp or plan change without requiring a fixed 5
   const changed = advanceCodexPeriods(moved, [{ ...quota(start + 120_000, 60), plan: "plus" }]);
   expect(changed.filter((p) => p.kind === "weekly")).toHaveLength(3);
   expect(changed.find((p) => p.kind === "weekly" && p.startedAt === start + 60_000)?.boundary).toBe("plan-change");
+});
+
+it("hides legacy unverified monetary quotes even before another account refresh", async () => {
+  const root = await mkdtemp(join(tmpdir(), "legacy-periods-")); roots.push(root);
+  const store = new CodexPeriodStore("old-account", root);
+  const { mkdir } = await import("node:fs/promises");
+  const { createHash } = await import("node:crypto");
+  const folder = join(root, "codex-periods");
+  await mkdir(folder);
+  const path = join(folder, `${createHash("sha256").update("old-account").digest("hex")}.json`);
+  await writeFile(path, JSON.stringify({ version: 1, periods: [{ ...advanceCodexPeriods([], [quota(start, 80)])[0],
+    estimatedTotalUsd: 80, usedPercent: 10 }] }));
+  expect((await store.load())[0].estimatedTotalUsd).toBeUndefined();
+  await store.update([quota(start, 80)], { fiveHour: { note: "unavailable" }, weekly: { note: "unavailable" } });
+  expect(await readFile(path, "utf8")).not.toContain("estimatedTotalUsd");
 });
 
 it("persists cycle records across restarts, isolates accounts and never stores credentials", async () => {

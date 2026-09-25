@@ -29,7 +29,7 @@ vi.mock("../src/config.js", async (importOriginal) => {
   return { ...original, configDirectory: () => stored.root, loadConfig: vi.fn(async () => ({ ...original.DEFAULT_CONFIG, dashboardPort: 0 })), saveConfig: vi.fn(async () => {}) };
 });
 vi.mock("../src/tokens/store.js", () => ({
-  localDate: () => "2026-06-01", readDailyUsage: vi.fn(async () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 })), appendUsage: vi.fn(async () => {}),
+  localDate: () => "2026-06-01", readDailyUsage: vi.fn(async () => ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 })), appendUsage: vi.fn(async () => true),
 }));
 vi.mock("../src/providers/codex.js", () => ({
   queryCodexQuota: vi.fn(async () => ({ capturedAt: Date.now(), fiveHour: { label: "5h", remainingPercent: 73 }, weekly: { label: "weekly", remainingPercent: 61 } })),
@@ -90,7 +90,7 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
 
 it("waits for the last ledger write before shutting down", async () => {
   let finishWrite!: () => void;
-  vi.mocked(appendUsage).mockImplementationOnce(() => new Promise<void>((resolve) => { finishWrite = resolve; }));
+  vi.mocked(appendUsage).mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishWrite = () => resolve(true); }));
   const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
   quotaMonitor({
     on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },

@@ -27,6 +27,13 @@ it("uses exact provider/model matching, Gemini high-context rates, and conservat
   expect(estimateRecordCost(record("antigravity", "gemini-3.8-flash-high", { input: 10_000, cacheRead: 20_000, output: 1000 })))
     .toBeCloseTo((10_000 * 0.75 + 20_000 * 0.075 + 1000 * 3.75) / 1e6);
   expect(estimateRecordCost(record("antigravity", "gemini-3.8-flash-image"))).toBeUndefined();
+  expect(estimateRecordCost(record("google-vertex", "gemini-3.8-flash", { input: 10_000, cacheRead: 20_000, output: 1000 })))
+    .toBeCloseTo((10_000 * 0.75 + 20_000 * 0.075 + 1000 * 3.75) / 1e6);
+  expect(estimateRecordCost(record("google-vertex", "gemini-3.8-flash", {
+    timestamp: Date.UTC(2027, 0, 1), input: 10_000, cacheRead: 20_000, output: 1000,
+  }))).toBeCloseTo((10_000 * 1.5 + 20_000 * 0.15 + 1000 * 7.5) / 1e6);
+  expect(estimateRecordCost(record("google-vertex", "gemini-3.8-flash-high"))).toBeUndefined();
+  expect(estimateRecordCost(record("google-vertex", "gemini-3.8-flash", { cacheWrite: 1 }))).toBeUndefined();
   expect(estimateRecordCost(record("antigravity", "gpt-6-sol"))).toBeUndefined();
   expect(estimateRecordCost(record("openai-codex", "unknown"))).toBeUndefined();
   expect(estimateRecordCost(record("openai-codex", "gpt-5.4", { cacheWrite: 1 }))).toBeUndefined();
@@ -38,19 +45,25 @@ it("freezes the collected cost, preserves recorded amounts, and retroactively pr
   const saved = tokenRecord({ role: "assistant", provider: usage.provider, model: usage.model, api: "openai-codex-responses",
     timestamp: usage.timestamp, content: [], stopReason: "stop", usage: { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
   expect(saved).toMatchObject({ pricingAsOf: PRICE_DATE, estimatedCostUsd: estimateRecordCost(usage) });
+  const vertexUsage = { ...usage, provider: "google-vertex", model: "gemini-3.8-flash", cacheWrite: 0 };
+  const vertexSaved = tokenRecord({ role: "assistant", provider: vertexUsage.provider, model: vertexUsage.model, api: "google-generative-ai",
+    timestamp: vertexUsage.timestamp, content: [], stopReason: "stop", usage: { ...vertexUsage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+  expect(vertexSaved).toMatchObject({ pricingAsOf: PRICE_DATE, estimatedCostUsd: estimateRecordCost(vertexUsage) });
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: 17, pricingAsOf: "older-price" })).toBe(17);
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: 0, pricingAsOf: "older-price" })).toBe(0);
   expect(estimateRecordCost({ ...usage, pricingAsOf: "older-price" })).toBeUndefined();
   expect(estimateRecordCost({ ...usage, provider: "antigravity", model: "gemini-3.8-flash", pricingAsOf: "older-price" }))
     .toBeCloseTo(estimateRecordCost({ ...usage, provider: "antigravity", model: "gemini-3.8-flash" })!);
+  expect(estimateRecordCost({ ...usage, provider: "google-vertex", model: "gemini-3.8-flash", pricingAsOf: "older-price" }))
+    .toBeCloseTo(estimateRecordCost({ ...usage, provider: "google-vertex", model: "gemini-3.8-flash" })!);
   expect(estimateRecordCost({ ...usage, model: "unknown-model", pricingAsOf: "older-price" })).toBeUndefined();
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: -1 })).toBeUndefined();
 });
 
 it("publishes a dated, official-source price catalogue", () => {
-  expect(PRICE_DATE).toBe("2026-09-24");
+  expect(PRICE_DATE).toBe("2026-09-25");
   expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(12);
   for (const row of PRICE_TABLE) {
-    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com)\//);
+    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com)\//);
   }
 });

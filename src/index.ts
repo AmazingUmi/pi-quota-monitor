@@ -14,6 +14,7 @@ import { UsageAggregator } from "./tokens/aggregate.js";
 import { accumulate, emptyTotals, tokenRecord } from "./tokens/collector.js";
 import { quotaAmountEstimates } from "./quota-estimate.js";
 import { appendUsage, localDate, readDailyUsage } from "./tokens/store.js";
+import { subagentUsage } from "./tokens/subagents.js";
 import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
 
 const STATUS_KEY = "pi-quota-monitor";
@@ -90,6 +91,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let dailyTotals = emptyTotals();
   let dailyDate = "";
   let ledgerQueue: Promise<void> = Promise.resolve();
+  let childUsage: ReturnType<typeof subagentUsage> | undefined;
+  let childUsageIncomplete = false;
+  const reconcileChildren = () => { void childUsage?.reconcile(); }; // No reliable account binding for detached children.
   let requestAccountId: string | undefined;
   let codexAccountId: string | undefined;
   const codex: ProviderCache<CodexQuota> = {};
@@ -269,6 +273,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     abortController?.abort();
     scheduler?.stop();
+    childUsage?.dispose();
+    childUsage = undefined;
     await detachDashboard(dashboardOwner, false);
     dashboard = undefined;
     accountAggregators.forEach((view) => view.stop());
@@ -278,6 +284,22 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     active = true;
     abortController = new AbortController();
     currentContext = ctx;
+    sessionTotals = branchTotals(ctx);
+    childUsageIncomplete = false;
+    childUsage = pi.events ? subagentUsage(pi, async (records, incomplete) => {
+      childUsageIncomplete ||= incomplete;
+      for (const record of records) {
+        ledgerQueue = ledgerQueue.then(async () => {
+          if (await appendUsage(record) && live(epoch)) {
+            sessionTotals = accumulate(sessionTotals, record);
+            if (localDate(record.timestamp) === dailyDate && (record.provider !== "openai-codex" || record.accountId === activeAccountId()))
+              dailyTotals = accumulate(dailyTotals, record);
+          }
+        });
+      }
+      await ledgerQueue;
+      if (live(epoch) && currentContext) render(currentContext);
+    }) : undefined;
     accountNotice = undefined;
     config = await loadConfig();
     if (!live(epoch)) return;
@@ -301,7 +323,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     agyHistory = restoredAgy;
     antigravity.value = agyHistory.at(-1);
     antigravity.restored = !!antigravity.value;
-    sessionTotals = branchTotals(ctx);
     await ledgerQueue;
     if (!live(epoch)) return;
     dailyDate = localDate(Date.now());
@@ -342,12 +363,17 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   pi.on("message_end", (event, ctx) => {
     if (!active || event.message.role !== "assistant") return;
     const record = tokenRecord(event.message);
+    if (record) {
+      record.source = "pi-message";
+      record.sessionId = ctx.sessionManager.getSessionFile?.() ?? ctx.sessionManager.getSessionId?.();
+    }
     if (record?.provider === "openai-codex" && requestAccountId) record.accountId = requestAccountId;
     requestAccountId = undefined;
     if (record) {
       sessionTotals = accumulate(sessionTotals, record);
       ledgerQueue = ledgerQueue.then(async () => {
-        await appendUsage(record);
+        const appended = await appendUsage(record);
+        if (!appended) return;
         const date = localDate(Date.now());
         if (date !== dailyDate) {
           dailyDate = date;
@@ -371,10 +397,19 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     }
   });
 
+  const unsubscribeChildEvents = [
+    pi.events?.on("subagents:rpc:v1:ready", reconcileChildren),
+    pi.events?.on("subagent:async-complete", reconcileChildren),
+    pi.events?.on("subagent:foreground-complete", reconcileChildren),
+  ];
+  pi.on("agent_settled", reconcileChildren);
+  pi.on("tool_result", (event) => { if (event.toolName === "subagent" || event.toolName === "bg_wait") reconcileChildren(); });
+
   const handleQuotaCommand = async (args: string, ctx: ExtensionContext, announce = true): Promise<void> => {
     if (!active) return;
     const epoch = generation;
     const command = args.trim();
+    if (command !== "console") await childUsage?.reconcile();
     // Native /login and external auth changes must invalidate the previous account's quota before display.
     void refresh("openai-codex", ctx);
     if (command === "console") {
@@ -440,7 +475,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             return { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId: selected,
               codexPeriods,
               currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
-              antigravity, usage: view.state(), context: currentContext ? contextMetrics(currentContext) : null,
+              antigravity, usage: { ...view.state(), childUsageIncomplete }, context: currentContext ? contextMetrics(currentContext) : null,
               quotaEstimates, config, updatedAt: Date.now() };
           },
           accountCommand: async (command, args) => {
@@ -646,6 +681,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    unsubscribeChildEvents.forEach((unsubscribe) => unsubscribe?.());
+    childUsage?.dispose();
+    childUsage = undefined;
     active = false;
     generation++;
     abortController?.abort();
