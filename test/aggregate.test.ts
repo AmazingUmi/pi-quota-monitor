@@ -130,6 +130,7 @@ it("aggregates priced and unpriced provider costs within exact quota-period boun
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp, timestamp + 1).pricedRecords).toBe(1);
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp + 1, timestamp + 2).pricedRecords).toBe(0);
   expect(aggregator.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp).pricedRecords).toBe(0);
+  expect(aggregator.estimateCostForPeriod("openai-codex", Date.now() - 9 * 86_400_000).incompleteWindow).toBe(true);
 });
 
 it("retains recorded amounts and filters exact-timestamp observations by model pool", async () => {

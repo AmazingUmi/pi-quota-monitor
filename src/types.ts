@@ -70,8 +70,12 @@ export interface QuotaAmountEstimate {
   sampleEndAt?: number;
   /** Percentage-point drop between recorded observations, not the whole cycle's used percentage. */
   usedPercent?: number;
-  /** Independently verified Pi-attributed percentage-point consumption. Never inferred from account readings. */
+  /** Independently verified Pi-attributed percentage-point consumption, if supplied. */
   piAttributedPercent?: number;
+  /** Denominator used for the quote; correlated means only coincident Pi activity, not proven attribution. */
+  calibrationPercent?: number;
+  attribution?: "verified" | "correlated";
+  excludedIntervals?: number;
   contaminated?: boolean;
   estimatedPeriodUsd?: number;
   estimatedRemainingUsd?: number;

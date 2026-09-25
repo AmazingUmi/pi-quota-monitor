@@ -460,7 +460,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             const showingCurrent = currentId !== undefined && selected === `account:${currentId}`;
             const visibleCodex = showingCurrent && codexAccountId === currentId ? codex : {};
             await ledgerQueue;
-            if ((view.state().updatedAt ?? 0) < Math.max(visibleCodex.value?.capturedAt ?? 0, antigravity.value?.capturedAt ?? 0)) await view.refresh();
+            // A child ledger write may land after the last quota reading. Always
+            // reconcile the incremental ledger cursor before estimating/displaying.
+            await view.refresh();
             const quotaEstimates = quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory);
             let codexPeriods = [] as Awaited<ReturnType<CodexPeriodStore["load"]>>;
             try {

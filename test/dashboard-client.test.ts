@@ -297,6 +297,16 @@ it("normalizes and orders OAI/AGY windows without detaching their estimates or i
   expect(labels("agy-windows").slice(0, 2)).toEqual(labels("codex-windows"));
 });
 
+it("labels correlated quota amounts as conditional rather than verified Pi attribution", async () => {
+  const state = dashboardFixture();
+  state.quotaEstimates.codex.weekly.attribution = "correlated";
+  state.quotaEstimates.codex.weekly.note = "同区间仍可能有外部消耗";
+  const { get } = await mount(state);
+  expect(get("codex-windows").textContent).toContain("当期总金额条件估算");
+  expect(get("codex-windows").textContent).toContain("账号额度下降");
+  expect(get("codex-windows").textContent).toContain("同区间仍可能有外部消耗");
+});
+
 it("switches quota graphics without losing open details and distinguishes zero/full/unknown pies", async () => {
   const state = dashboardFixture();
   state.codex.value!.weekly!.remainingPercent = 0;

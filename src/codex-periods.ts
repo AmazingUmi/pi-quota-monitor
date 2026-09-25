@@ -23,6 +23,8 @@ export interface CodexPeriod {
   sampleEndAt?: number;
   usedPercent?: number;
   piAttributedPercent?: number;
+  calibrationPercent?: number;
+  attribution?: "verified" | "correlated";
 }
 
 const KINDS: CodexPeriodKind[] = ["fiveHour", "weekly"];
@@ -44,7 +46,10 @@ function valid(row: unknown): row is CodexPeriod {
     && (p.sampleStartAt === undefined || finite(p.sampleStartAt))
     && (p.sampleEndAt === undefined || finite(p.sampleEndAt))
     && (p.usedPercent === undefined || finite(p.usedPercent))
-    && (p.piAttributedPercent === undefined || (finite(p.piAttributedPercent) && p.piAttributedPercent > 0));
+    && (p.piAttributedPercent === undefined || (finite(p.piAttributedPercent) && p.piAttributedPercent > 0))
+    && (p.calibrationPercent === undefined || (finite(p.calibrationPercent) && p.calibrationPercent > 0))
+    && (p.attribution === undefined || ["verified", "correlated"].includes(p.attribution))
+    && (p.attribution !== "verified" || (finite(p.piAttributedPercent) && p.piAttributedPercent > 0));
 }
 
 /** Any observed increase starts a new period, even if the advertised reset time did not change. */
@@ -62,7 +67,7 @@ export function advanceCodexPeriods(
   // Pre-attribution versions stored quotes calibrated against account-wide deltas.
   // They cannot be trusted when another client used the same OAuth account.
   const periods = existing.map((p) => {
-    if (p.piAttributedPercent !== undefined) return { ...p };
+    if (p.piAttributedPercent !== undefined || p.attribution === "correlated") return { ...p };
     const { estimatedTotalUsd: _old, estimateAsOf: _at,
       sampleStartAt: _start, sampleEndAt: _end, usedPercent: _drop, ...safe } = p;
     return { ...safe } as CodexPeriod;
@@ -91,21 +96,29 @@ export function advanceCodexPeriods(
       }
     }
   }
-  // A quote belongs only to the active period and to its most recent observation.
+  // Keep the latest eligible sample within the active period, even when a later
+  // account-only decline was excluded from calibration.
   const latest = sorted.at(-1);
   if (latest && estimates) for (const kind of KINDS) {
     const period = lastByKind.get(kind);
     const estimate: QuotaAmountEstimate = estimates[kind];
     if (period && !period.closedAt && latest[kind] && period.lastAt === latest.capturedAt
-      && estimate.sampleEndAt === latest.capturedAt && finite(estimate.estimatedPeriodUsd)
-      && estimate.estimatedPeriodUsd >= 0 && finite(estimate.sampleStartAt) && finite(estimate.usedPercent)
-      && finite(estimate.piAttributedPercent) && estimate.piAttributedPercent > 0) {
+      && finite(estimate.sampleEndAt) && estimate.sampleEndAt <= latest.capturedAt
+      && estimate.sampleEndAt >= period.startedAt && finite(estimate.estimatedPeriodUsd)
+      && estimate.estimatedPeriodUsd >= 0 && finite(estimate.sampleStartAt)
+      && estimate.sampleStartAt >= period.startedAt && finite(estimate.usedPercent)
+      && (estimate.attribution === "correlated" || (estimate.attribution === "verified"
+        && finite(estimate.piAttributedPercent) && estimate.piAttributedPercent > 0))
+      && finite(estimate.calibrationPercent) && estimate.calibrationPercent > 0) {
       period.estimatedTotalUsd = estimate.estimatedPeriodUsd;
       period.estimateAsOf = latest.capturedAt;
       period.sampleStartAt = estimate.sampleStartAt;
       period.sampleEndAt = estimate.sampleEndAt;
       period.usedPercent = estimate.usedPercent;
-      period.piAttributedPercent = estimate.piAttributedPercent;
+      period.calibrationPercent = estimate.calibrationPercent;
+      period.attribution = estimate.attribution;
+      if (estimate.attribution === "verified" && finite(estimate.piAttributedPercent)) period.piAttributedPercent = estimate.piAttributedPercent;
+      else delete period.piAttributedPercent;
     }
   }
   return periods.slice(-MAX_PERIODS);
@@ -123,7 +136,7 @@ export class CodexPeriodStore {
 
   async load(): Promise<CodexPeriod[]> {
     return this.readPeriods().then((periods) => periods.map((p) => {
-      if (p.piAttributedPercent !== undefined) return p;
+      if (p.piAttributedPercent !== undefined || p.attribution === "correlated") return p;
       const { estimatedTotalUsd: _old, estimateAsOf: _at, sampleStartAt: _start,
         sampleEndAt: _end, usedPercent: _drop, ...safe } = p;
       return safe;
@@ -141,9 +154,9 @@ export class CodexPeriodStore {
         const rows = (value as { periods?: unknown }).periods;
         if (!Array.isArray(rows) || rows.length > MAX_PERIODS || !rows.every(valid)) throw new Error("Invalid period history");
         return rows.map(({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-          estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent }: CodexPeriod) =>
+          estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent, calibrationPercent, attribution }: CodexPeriod) =>
           ({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-            estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent }));
+            estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, piAttributedPercent, calibrationPercent, attribution }));
       } finally { await file.close(); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];

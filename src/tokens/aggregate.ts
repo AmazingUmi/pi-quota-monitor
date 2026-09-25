@@ -41,6 +41,8 @@ interface PeriodCost {
 }
 
 export interface PeriodCostSummary {
+  /** Older cost rows were pruned; an interval crossing this boundary cannot be calibrated. */
+  incompleteWindow?: boolean;
   totalTokens: number;
   estimatedCostUsd: number;
   pricedRecords: number;
@@ -88,7 +90,9 @@ export class UsageAggregator {
   state(): UsageSummary { return this.summary; }
 
   estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now(), modelFilter?: (model: string) => boolean): PeriodCostSummary {
-    const result = { totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
+    const result: PeriodCostSummary = { totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0,
+      unpricedRecords: 0, unpricedTokens: 0,
+      ...(startAt < Date.now() - PERIOD_COST_RETENTION_MS ? { incompleteWindow: true } : {}) };
     for (const state of this.files.values()) {
       for (const item of state.periodCosts.values()) {
         if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt || (modelFilter && !modelFilter(item.model))) continue;

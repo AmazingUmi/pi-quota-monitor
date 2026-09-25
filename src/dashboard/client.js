@@ -107,7 +107,8 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
   if (showTotal && !notApplicable) {
     const amounts = document.createElement("div");
     amounts.className = "quota-money-values";
-    for (const [name, value] of [["剩余估算", estimate?.estimatedRemainingUsd], ["当期总金额估算", estimate?.estimatedPeriodUsd]]) {
+    for (const [name, value] of [[estimate?.attribution === "correlated" ? "剩余条件估算" : "剩余估算", estimate?.estimatedRemainingUsd],
+      [estimate?.attribution === "correlated" ? "当期总金额条件估算" : "当期总金额估算", estimate?.estimatedPeriodUsd]]) {
       const item = document.createElement("div");
       const caption = document.createElement("span");
       caption.textContent = name;
@@ -126,10 +127,10 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
     const summary = document.createElement("summary");
     const detail = document.createElement("p");
     if (estimated) {
-      summary.textContent = showTotal ? "查看估算依据" : `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
+      summary.textContent = showTotal ? "查看估算依据" : `${estimate.attribution === "correlated" ? "剩余条件估算" : "剩余估算"} ${money(estimate.estimatedRemainingUsd)}`;
       const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ` : "";
       const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
-      detail.textContent = `${interval}记录金额 ${money(estimate.observedCostUsd)} · ${tokens}额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
+      detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
     } else {
       summary.textContent = "金额暂不可估算";
       detail.textContent = estimate.note;
@@ -414,7 +415,7 @@ function renderCodexPeriodChart() {
       svg.append(svgElement("line", { x1: x, x2: x, y1: bottom, y2: y, class: "period-stem" }));
       const marker = svgElement("circle", { cx: x, cy: y, r: 4, class: period.closedAt ? "chart-point" : "period-active" });
       const boundary = { increase: "额度增加", "reset-time": "重置时间变化", "plan-change": "套餐变化" }[period.boundary] ?? "";
-      marker.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · ${period.closedAt ? "已观察到下一期" : "尚未观察到下一期"} · 总金额估算 ${money(value)}${boundary ? ` · 下一期触发：${boundary}` : ""}`));
+      marker.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · ${period.closedAt ? "已观察到下一期" : "尚未观察到下一期"} · ${period.attribution === "correlated" ? "条件估算（同区间可能有外部消耗）" : "总金额估算"} ${money(value)}${boundary ? ` · 下一期触发：${boundary}` : ""}`));
       svg.append(marker);
     }
     if (index === 0 || index === periods.length - 1 || index % Math.max(1, Math.ceil(periods.length / 5)) === 0) {
@@ -459,7 +460,7 @@ function renderPriceTable(pricing) {
     link.href = item.source;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
-    link.textContent = item.model;
+    link.textContent = `${item.model}${item.effectiveFrom ? ` · ${new Date(item.effectiveFrom).toISOString().slice(0, 10)} 起` : ""}`;
     model.append(link);
     tr.append(provider, model);
     for (const value of [item.rates.input, item.rates.cacheRead, item.rates.cacheWrite, item.rates.output,

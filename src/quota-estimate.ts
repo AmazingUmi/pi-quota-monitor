@@ -11,7 +11,7 @@ export function antigravityWindowDuration(label: string): number | undefined {
   return undefined;
 }
 
-/** Calibrate only against observed quota deltas and ledger records in that exact observation interval. */
+/** Compare adjacent readings, never treating an account-wide drop as verified Pi consumption. */
 export function estimateQuotaAmount(
   readings: WindowReading[],
   durationMs: number | undefined,
@@ -29,37 +29,58 @@ export function estimateQuotaAmount(
   if (durationMs === undefined || durationMs <= 0) return { note: "仅对可识别的 5 小时 / 每周窗口估算金额。" };
   if (window.resetAt === undefined || !Number.isFinite(window.resetAt)) return { note: "缺少本周期重置时间，无法匹配读数。" };
   if (window.resetAt <= now) return { note: "额度窗口已到重置时间，请刷新额度后查看估算。" };
-  let baseline = latest!;
-  // Codex uses observed boundaries; keep the nominal-duration guard for other providers.
-  for (let i = sorted.length - 2; i >= 0; i--) {
-    const prior = sorted[i];
-    const w = prior.window;
-    if (!w || !Number.isFinite(w.remainingPercent) || w.resetAt === undefined
-      || Math.abs(w.resetAt - window.resetAt) > 60_000
-      || (!observedPeriod && prior.capturedAt < window.resetAt - durationMs)
-      || prior.capturedAt >= baseline.capturedAt || w.resetAt <= baseline.capturedAt
-      || w.remainingPercent < baseline.window!.remainingPercent) break;
-    baseline = prior;
+  let recent: Omit<QuotaAmountEstimate, "note"> | undefined;
+  let excludedIntervals = 0;
+  // Use only adjacent observations. Spanning multiple readings would quietly fold an
+  // account-only (e.g. Codex CLI) drop into Pi's calibration denominator.
+  for (let i = sorted.length - 1; i > 0; i--) {
+    const end = sorted[i];
+    const start = sorted[i - 1];
+    const current = end.window;
+    const prior = start.window;
+    if (!current || !prior || !Number.isFinite(current.remainingPercent) || !Number.isFinite(prior.remainingPercent)
+      || current.resetAt === undefined || prior.resetAt === undefined
+      || Math.abs(current.resetAt - window.resetAt) > 60_000
+      || Math.abs(prior.resetAt - current.resetAt) > 60_000
+      || (!observedPeriod && start.capturedAt < window.resetAt - durationMs)
+      || start.capturedAt >= end.capturedAt || prior.resetAt <= end.capturedAt
+      || prior.remainingPercent < current.remainingPercent) break;
+    const usedPercent = prior.remainingPercent - current.remainingPercent;
+    const cost = costForPeriod(start.capturedAt, end.capturedAt);
+    const observed = { observedCostUsd: cost.estimatedCostUsd, observedTokens: cost.totalTokens,
+      sampleStartAt: start.capturedAt, sampleEndAt: end.capturedAt, usedPercent,
+      ...(cost.unpricedRecords ? { unpricedRecords: cost.unpricedRecords } : {}),
+      ...(ledgerStale ? { ledgerStale: true } : {}) };
+    recent ??= observed;
+    if (ledgerStale) return { ...observed, note: "账本汇总已过期，暂不外推金额。" };
+    if (cost.incompleteWindow) return { ...observed, note: "采样区间早于账本金额缓存范围，无法核实完整 Pi 用量。" };
+    if (cost.unpricedRecords) return { ...observed, note: "记录区间含未计价用量，暂不外推金额。" };
+    if (usedPercent <= 0) continue;
+    if (cost.totalTokens <= 0) {
+      excludedIntervals++;
+      continue;
+    }
+    if (!cost.pricedRecords || cost.estimatedCostUsd <= 0) continue;
+    const independentlyAttributed = attributedQuota?.(start.capturedAt, end.capturedAt, usedPercent);
+    if (independentlyAttributed !== undefined && (!Number.isFinite(independentlyAttributed)
+      || independentlyAttributed <= 0 || independentlyAttributed > usedPercent)) {
+      return { ...observed, contaminated: true, note: "Pi 归因额度数据无效，此区间不用于金额校准。" };
+    }
+    const calibrationPercent = independentlyAttributed ?? usedPercent;
+    const estimatedPeriodUsd = cost.estimatedCostUsd / (calibrationPercent / 100);
+    if (!Number.isFinite(estimatedPeriodUsd)) continue;
+    return { ...observed, calibrationPercent, ...(independentlyAttributed !== undefined ? { piAttributedPercent: independentlyAttributed } : {}),
+      attribution: independentlyAttributed !== undefined ? "verified" : "correlated", excludedIntervals,
+      estimatedPeriodUsd, estimatedRemainingUsd: estimatedPeriodUsd * window.remainingPercent / 100,
+      note: independentlyAttributed !== undefined
+        ? "按独立核实的 Pi 归因额度和本地 API 标价换算；非账户实际账单。"
+        : `按同一采样区间的 Pi Token 金额与账号额度下降作条件估算${excludedIntervals ? `；已排除 ${excludedIntervals} 个无 Pi 记录的额度下降区间` : ""}。同区间仍可能有外部消耗，此值不是已核实的 Pi 归因金额。` };
   }
-  if (baseline === latest) return { note: "等待同一周期的第二次额度读数，暂不使用全部已用额度外推。" };
-  const usedPercent = baseline.window!.remainingPercent - window.remainingPercent;
-  const cost = costForPeriod(baseline.capturedAt, latest!.capturedAt);
-  const observed = { observedCostUsd: cost.estimatedCostUsd, observedTokens: cost.totalTokens,
-    sampleStartAt: baseline.capturedAt, sampleEndAt: latest!.capturedAt, usedPercent,
-    ...(cost.unpricedRecords ? { unpricedRecords: cost.unpricedRecords } : {}), ...(ledgerStale ? { ledgerStale: true } : {}) };
-  if (!cost.pricedRecords || cost.estimatedCostUsd <= 0) return { ...observed, note: "两次读数之间没有正金额的可计价记录，无法外推金额。" };
-  if (usedPercent <= 0) return { ...observed, note: "记录区间内额度尚未下降，等待新的读数后估算。" };
-  if (ledgerStale || cost.unpricedRecords) return { ...observed, note: ledgerStale ? "账本汇总已过期，暂不外推金额。" : "记录区间含未计价用量，暂不外推金额。" };
-  // An account reading is not attribution evidence: Codex CLI and other Pi processes
-  // can consume the same window. Only independently verified Pi quota may calibrate.
-  const attributed = attributedQuota?.(baseline.capturedAt, latest!.capturedAt, usedPercent);
-  if (attributed === undefined || !Number.isFinite(attributed) || attributed <= 0 || attributed > usedPercent) {
-    return { ...observed, contaminated: true, note: "账号额度变化可能包含外部客户端用量；缺少独立的 Pi 归因证据，此区间不用于金额校准。" };
-  }
-  const estimatedPeriodUsd = cost.estimatedCostUsd / (attributed / 100);
-  if (!Number.isFinite(estimatedPeriodUsd)) return { ...observed, note: "额度变化过小，暂不外推金额。" };
-  return { ...observed, piAttributedPercent: attributed, estimatedPeriodUsd, estimatedRemainingUsd: estimatedPeriodUsd * window.remainingPercent / 100,
-    note: "按已核实的 Pi 归因额度和本地公开 API 单价换算；非账户实际账单。" };
+  if (!recent) return { note: "等待同一周期的第二次额度读数，暂不使用全部已用额度外推。" };
+  if (excludedIntervals) return { ...recent, contaminated: true, excludedIntervals,
+    note: "账号额度下降，但对应区间没有 Pi Token 记录；疑似外部客户端用量或本地漏记，不用于校准。" };
+  if (!recent.usedPercent) return { ...recent, note: "记录区间内额度尚未下降，等待新的读数后估算。" };
+  return { ...recent, note: "两次读数之间没有正金额的可计价 Pi 用量，无法外推金额。" };
 }
 
 export function quotaAmountEstimates(

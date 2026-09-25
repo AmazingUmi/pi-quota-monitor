@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { antigravityWindowDuration, estimateQuotaAmount, FIVE_HOURS_MS, ONE_WEEK_MS, quotaAmountEstimates, type WindowReading } from "../src/quota-estimate.js";
-import type { UsageAggregator } from "../src/tokens/aggregate.js";
+import type { PeriodCostSummary, UsageAggregator } from "../src/tokens/aggregate.js";
 
 const now = Date.parse("2026-09-23T12:00:00Z");
 const resetAt = now + 2 * 3_600_000;
@@ -20,14 +20,41 @@ it("uses only observed percentage-point changes and costs within the recorded ti
   expect(result.estimatedPeriodUsd).not.toBe(20);
 });
 
-it("rejects account-wide quota drops unless Pi attribution is independently verified", () => {
+it("estimates coincident Pi usage conditionally without calling account drops verified attribution", () => {
   const readings = [sample(now - 3600_000, 70), sample(now, 60)];
-  const unverified = estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now);
-  expect(unverified).toMatchObject({ usedPercent: 10, observedCostUsd: 8, contaminated: true });
-  expect(unverified.estimatedPeriodUsd).toBeUndefined();
+  const correlated = estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now);
+  expect(correlated).toMatchObject({ usedPercent: 10, observedCostUsd: 8, attribution: "correlated",
+    calibrationPercent: 10, estimatedPeriodUsd: 80 });
+  expect(correlated.piAttributedPercent).toBeUndefined();
+  expect(correlated.note).toContain("同区间仍可能有外部消耗");
   expect(estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now, false, false, () => 12).contaminated).toBe(true);
   const verified = estimateQuotaAmount(readings, FIVE_HOURS_MS, () => cost, now, false, false, () => 4);
-  expect(verified).toMatchObject({ usedPercent: 10, piAttributedPercent: 4, estimatedPeriodUsd: 200 });
+  expect(verified).toMatchObject({ usedPercent: 10, attribution: "verified", piAttributedPercent: 4,
+    calibrationPercent: 4, estimatedPeriodUsd: 200 });
+});
+
+it("excludes account-only declines rather than merging them into an earlier Pi sample", () => {
+  const first = now - 120_000;
+  const middle = now - 60_000;
+  const readings = [sample(first, 90), sample(middle, 80), sample(now, 70)];
+  const periodCost = vi.fn((start: number, end: number) => start === first && end === middle
+    ? cost : { totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 });
+  const result = estimateQuotaAmount(readings, FIVE_HOURS_MS, periodCost, now);
+  expect(periodCost).toHaveBeenCalledWith(middle, now);
+  expect(periodCost).toHaveBeenCalledWith(first, middle);
+  expect(result).toMatchObject({ sampleStartAt: first, sampleEndAt: middle, observedCostUsd: 8,
+    usedPercent: 10, excludedIntervals: 1, attribution: "correlated", estimatedPeriodUsd: 80,
+    estimatedRemainingUsd: 56 });
+  const accountOnly = estimateQuotaAmount(readings.slice(1), FIVE_HOURS_MS, periodCost, now);
+  expect(accountOnly).toMatchObject({ contaminated: true, excludedIntervals: 1 });
+  expect(accountOnly.estimatedPeriodUsd).toBeUndefined();
+});
+
+it("does not classify unpriced local activity as external-only", () => {
+  const result = estimateQuotaAmount([sample(now - 60_000, 70), sample(now, 60)], FIVE_HOURS_MS,
+    () => ({ ...cost, totalTokens: 1000, pricedRecords: 0, unpricedRecords: 1, estimatedCostUsd: 0 }), now);
+  expect(result.note).toContain("未计价");
+  expect(result.contaminated).toBeUndefined();
 });
 
 it("recognizes supported Antigravity windows without inventing other periods", () => {
@@ -39,7 +66,7 @@ it("recognizes supported Antigravity windows without inventing other periods", (
 
 it("does not extrapolate from one reading, zero change, expired/missing windows or incomplete costs", () => {
   const readings = [sample(now - 3600_000, 70), sample(now, 60)];
-  const estimate = (rows = readings, summary = cost, stale = false) => estimateQuotaAmount(rows, FIVE_HOURS_MS, () => summary, now, stale);
+  const estimate = (rows = readings, summary: PeriodCostSummary = cost, stale = false) => estimateQuotaAmount(rows, FIVE_HOURS_MS, () => summary, now, stale);
   expect(estimate([]).estimatedPeriodUsd).toBeUndefined();
   expect(estimate([readings[1]]).note).toContain("第二次");
   expect(estimate([sample(now - 3600_000, 60), readings[1]]).note).toContain("尚未下降");
@@ -47,6 +74,7 @@ it("does not extrapolate from one reading, zero change, expired/missing windows 
   expect(estimate([sample(now, 60, now)]).note).toContain("已到重置时间");
   expect(estimate(readings, { ...cost, estimatedCostUsd: 0 }).estimatedPeriodUsd).toBeUndefined();
   expect(estimate(readings, { ...cost, unpricedRecords: 1 }).note).toContain("未计价");
+  expect(estimate(readings, { ...cost, incompleteWindow: true }).note).toContain("缓存范围");
   expect(estimate(readings, cost, true).note).toContain("已过期");
 });
 
@@ -56,7 +84,7 @@ it("never crosses a reset or quota increase and accepts small reset timestamp ro
   expect(estimate([sample(now - 3600_000, 50), sample(now, 60)]).estimatedPeriodUsd).toBeUndefined();
   const result = estimate([sample(now - 7200_000, 40), sample(now - 3600_000, 70), sample(now, 60, resetAt + 1000)]);
   expect(result.sampleStartAt).toBe(now - 3600_000);
-  expect(result.contaminated).toBe(true);
+  expect(result).toMatchObject({ attribution: "correlated", sampleStartAt: now - 3600_000, estimatedRemainingUsd: 48 });
 });
 
 it("recalibrates after an early manual increase without crossing into the old OAI period", () => {
@@ -66,7 +94,7 @@ it("recalibrates after an early manual increase without crossing into the old OA
   const periodCost = vi.fn(() => cost);
   const result = estimateQuotaAmount([before, reset, after], ONE_WEEK_MS, periodCost, now, false, true, () => 10);
   expect(periodCost).toHaveBeenCalledExactlyOnceWith(reset.capturedAt, after.capturedAt);
-  expect(result).toMatchObject({ sampleStartAt: reset.capturedAt, estimatedPeriodUsd: 80 });
+  expect(result).toMatchObject({ sampleStartAt: reset.capturedAt, attribution: "verified", estimatedPeriodUsd: 80 });
 });
 
 it("estimates within an unusually long OAI period without assuming exactly 7 days", () => {

@@ -14,7 +14,7 @@ const quota = (capturedAt: number, weekly: number, fiveHour = 80, reset = resetA
   fiveHour: { label: "5h", remainingPercent: fiveHour, resetAt: start + 5 * 3_600_000 },
 });
 const estimates = (end: number, total: number): QuotaAmountEstimates["codex"] => ({
-  weekly: { note: "estimated", estimatedPeriodUsd: total, sampleStartAt: start, sampleEndAt: end, usedPercent: 10, piAttributedPercent: 10 },
+  weekly: { note: "estimated", estimatedPeriodUsd: total, sampleStartAt: start, sampleEndAt: end, usedPercent: 10, piAttributedPercent: 10, calibrationPercent: 10, attribution: "verified" },
   fiveHour: { note: "unavailable" },
 });
 
@@ -28,11 +28,34 @@ it("splits early/manual increases even with unchanged resetAt and keeps independ
   expect(periods.find((p) => p.kind === "weekly" && p.startedAt === start)).toMatchObject({ closedAt: start + 120_000, boundary: "increase", estimatedTotalUsd: 80 });
   expect(periods.find((p) => p.kind === "weekly" && p.startedAt === start + 120_000)?.estimatedTotalUsd).toBeUndefined();
   const next = advanceCodexPeriods(periods, [quota(start + 180_000, 80)], {
-    weekly: { note: "estimated", estimatedPeriodUsd: 120, sampleStartAt: start + 120_000, sampleEndAt: start + 180_000, usedPercent: 20, piAttributedPercent: 20 },
+    weekly: { note: "estimated", estimatedPeriodUsd: 120, sampleStartAt: start + 120_000, sampleEndAt: start + 180_000, usedPercent: 20, piAttributedPercent: 20, calibrationPercent: 20, attribution: "verified" },
     fiveHour: { note: "unavailable" },
   });
   expect(next.find((p) => p.kind === "weekly" && !p.closedAt)?.estimatedTotalUsd).toBe(120);
   expect(advanceCodexPeriods(next, [quota(start + 180_000, 80)], estimates(start + 60_000, 80))).toEqual(next);
+});
+
+it("persists explicitly labeled conditional quotes without claiming verified Pi consumption", async () => {
+  const readings = [quota(start, 90), quota(start + 60_000, 80)];
+  const quote: QuotaAmountEstimates["codex"] = {
+    fiveHour: { note: "unavailable" },
+    weekly: { note: "conditional", attribution: "correlated", calibrationPercent: 10,
+      estimatedPeriodUsd: 80, sampleStartAt: start, sampleEndAt: start + 60_000, usedPercent: 10 },
+  };
+  const periods = advanceCodexPeriods([], readings, quote);
+  expect(periods.find((p) => p.kind === "weekly")).toMatchObject({ attribution: "correlated",
+    calibrationPercent: 10, estimatedTotalUsd: 80 });
+  expect(periods.find((p) => p.kind === "weekly")?.piAttributedPercent).toBeUndefined();
+  expect(advanceCodexPeriods(periods, readings, quote)).toEqual(periods);
+  const later = advanceCodexPeriods(periods, [...readings, quota(start + 120_000, 70)], quote);
+  expect(later.find((p) => p.kind === "weekly")).toMatchObject({ estimatedTotalUsd: 80,
+    sampleEndAt: start + 60_000, estimateAsOf: start + 120_000 });
+  const root = await mkdtemp(join(tmpdir(), "conditional-periods-")); roots.push(root);
+  const store = new CodexPeriodStore("conditional-account", root);
+  await store.update([...readings, quota(start + 120_000, 70)], quote);
+  expect((await store.load()).find((p) => p.kind === "weekly")).toMatchObject({
+    attribution: "correlated", calibrationPercent: 10, estimatedTotalUsd: 80,
+  });
 });
 
 it("removes legacy quotes that lack independent Pi attribution", () => {

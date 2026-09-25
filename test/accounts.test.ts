@@ -410,7 +410,7 @@ it("keeps quota amount estimates bound to the active account when viewing totals
     await handlers.get("session_start")?.({}, ctx);
     await consoleCommand("", ctx);
     type State = { selectedAccountId: string; usage: { records: number; pricing: { estimatedCostUsd: number } };
-      quotaEstimates: { codex: { weekly: { observedCostUsd?: number } } }; codex: { value?: unknown } };
+      quotaEstimates: { codex: { weekly: { observedCostUsd?: number; estimatedPeriodUsd?: number; attribution?: string; piAttributedPercent?: number } } }; codex: { value?: unknown } };
     const load = async (account: string) => (await (await fetch(`${url}/api/state?account=${account}`)).json()) as State;
     await vi.waitFor(async () => expect((await load("account%3Apro-id")).quotaEstimates.codex.weekly.observedCostUsd).toBeGreaterThan(0));
     const initial = await (await fetch(`${url}/api/state`)).json() as State;
@@ -422,6 +422,9 @@ it("keeps quota amount estimates bound to the active account when viewing totals
     expect(plus.usage.records).toBe(2);
     expect(all.usage.records).toBe(4);
     expect(pro.quotaEstimates.codex.weekly.observedCostUsd).toBeCloseTo(pro.usage.pricing.estimatedCostUsd);
+    expect(pro.quotaEstimates.codex.weekly.estimatedPeriodUsd).toBeGreaterThan(0);
+    expect(pro.quotaEstimates.codex.weekly.attribution).toBe("correlated");
+    expect(pro.quotaEstimates.codex.weekly.piAttributedPercent).toBeUndefined();
     expect(plus.quotaEstimates.codex.weekly.observedCostUsd).toBeUndefined();
     expect(all.quotaEstimates.codex.weekly.observedCostUsd).toBeUndefined();
     expect(plus.codex.value).toBeUndefined();

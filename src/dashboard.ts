@@ -176,8 +176,8 @@ export class QuotaDashboard {
             pricedRecords: usage.pricing.pricedRecords, unpricedRecords: usage.pricing.unpricedRecords,
             unpricedTokens: usage.pricing.unpricedTokens,
             catalog: PRICE_TABLE.map((row) => ({ provider: row.provider, model: row.model, rates: { ...row.rates },
-              source: row.source, ...(row.longContext ? { longContext: { threshold: row.longContext.threshold, rates: { ...row.longContext.rates } } } : {}) })) },
-          records: usage.records, invalidRecords: usage.invalidRecords,
+              source: row.source, ...(row.effectiveFrom ? { effectiveFrom: row.effectiveFrom } : {}), ...(row.longContext ? { longContext: { threshold: row.longContext.threshold, rates: { ...row.longContext.rates } } } : {}) })) },
+          records: usage.records, invalidRecords: usage.invalidRecords, childUsageIncomplete: usage.childUsageIncomplete,
           timeline: {
             hours: usage.timeline.hours.map(({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords }) =>
               ({ bucket, provider, model, totalTokens, estimatedCostUsd, pricedRecords, unpricedRecords })),
@@ -193,9 +193,9 @@ export class QuotaDashboard {
             .flatMap((kind) => codexPeriods.filter((period) => period.kind === kind).slice(-24))
             .sort((a, b) => a.startedAt - b.startedAt)
             .map(({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent }) =>
+              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, attribution }) =>
             ({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent })),
+              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, attribution })),
           dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
           config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
             showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
