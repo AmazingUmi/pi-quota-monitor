@@ -40,6 +40,48 @@ it("uses exact provider/model matching, Gemini high-context rates, and conservat
   expect(estimateRecordCost(record("antigravity", "gemini-3-flash-preview", { cacheWrite: 1 }))).toBeUndefined();
 });
 
+it("prices DeepSeek's cache hits, misses, peak windows, weekends and Chinese public holidays", () => {
+  const at = (iso: string, model = "deepseek-flash") => record("deepseek", model, {
+    timestamp: Date.parse(iso), input: 1_000_000, output: 100_000, cacheRead: 200_000, cacheWrite: 10_000,
+  });
+  const offPeak = (0.15 + 0.6 * 0.1 + 0.003 * 0.2 + 0.15 * 0.01);
+  const peak = offPeak * 2;
+  expect(estimateRecordCost(at("2026-09-24T00:59:59Z"))).toBeCloseTo(offPeak);
+  expect(estimateRecordCost(at("2026-09-24T01:00:00Z"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T03:59:59Z"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T04:00:00Z"))).toBeCloseTo(offPeak);
+  expect(estimateRecordCost(at("2026-09-24T06:00:00Z"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T10:00:00Z"))).toBeCloseTo(offPeak);
+  expect(estimateRecordCost(at("2026-09-25T01:00:00Z"))).toBeCloseTo(offPeak); // Mid-Autumn holiday
+  expect(estimateRecordCost(at("2026-09-26T01:00:00Z"))).toBeCloseTo(offPeak); // Saturday
+  expect(estimateRecordCost(at("2026-09-28T01:00:00Z"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T06:00:00Z", "deepseek-v4-flash"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T01:00:00Z", "deepseek-v4-flash-vision-exp"))).toBeCloseTo(peak);
+  expect(estimateRecordCost(at("2026-09-24T01:00:00Z", "deepseek-v4-pro")))
+    .toBeCloseTo(1.32 + 3.96 * 0.1 + 0.044 * 0.2 + 1.32 * 0.01);
+  expect(estimateRecordCost(at("2026-09-24T01:00:00Z", "deepseek-chat"))).toBeUndefined();
+  expect(estimateRecordCost({ ...at("2026-09-24T01:00:00Z"), timestamp: NaN })).toBeUndefined();
+});
+
+it("prices direct providers and newer model rates, including dated Gemini promotions", () => {
+  expect(estimateRecordCost(record("openai", "gpt-5.6-sol", { input: 100_000, cacheRead: 200_000, cacheWrite: 10_000 })))
+    .toBeCloseTo((100_000 * 8 + 200_000 * 0.8 + 10_000 * 10 + 100_000 * 30) / 1e6);
+  expect(estimateRecordCost(record("openai", "gpt-5.6", { input: 10_000, cacheRead: 2000, output: 1000 })))
+    .toBeCloseTo((10_000 * 4 + 2000 * 0.4 + 1000 * 20) / 1e6);
+  expect(estimateRecordCost(record("openai-codex", "gpt-5.6-cyber", { input: 10_000, cacheRead: 1000, cacheWrite: 1000 })))
+    .toBeCloseTo((10_000 * 12.5 + 1000 * 1.25 + 1000 * 15.625 + 100_000 * 75) / 1e6);
+  expect(estimateRecordCost(record("anthropic", "claude-fable-5-1", { input: 1000, cacheRead: 1000, cacheWrite: 1000, output: 1000 })))
+    .toBeCloseTo((1000 * 10 + 1000 * 0.25 + 1000 * 12.5 + 1000 * 50) / 1e6);
+  expect(estimateRecordCost(record("google", "gemini-3.7-flash", { timestamp: Date.UTC(2026, 11, 31) })))
+    .toBeCloseTo(0.75 + 0.075 * 0.2 + 3.75 * 0.1);
+  expect(estimateRecordCost(record("google", "gemini-3.7-flash", { timestamp: Date.UTC(2027, 0, 1) })))
+    .toBeCloseTo(1.5 + 0.15 * 0.2 + 7.5 * 0.1);
+  expect(estimateRecordCost(record("google", "gemini-2.5-flash-lite")))
+    .toBeCloseTo(0.1 + 0.01 * 0.2 + 0.4 * 0.1);
+  expect(estimateRecordCost(record("google-vertex", "gemini-2.5-flash"))).toBeUndefined();
+  expect(estimateRecordCost(record("antigravity", "claude-fable-5-1", { cacheWrite: 1000 }))).toBeDefined();
+});
+
 it("freezes the collected cost, preserves recorded amounts, and retroactively prices unpriced records", () => {
   const usage = record("openai-codex", "gpt-6-sol");
   const saved = tokenRecord({ role: "assistant", provider: usage.provider, model: usage.model, api: "openai-codex-responses",
@@ -62,8 +104,8 @@ it("freezes the collected cost, preserves recorded amounts, and retroactively pr
 
 it("publishes a dated, official-source price catalogue", () => {
   expect(PRICE_DATE).toBe("2026-09-25");
-  expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(12);
+  expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(60);
   for (const row of PRICE_TABLE) {
-    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com)\//);
+    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com|api-docs\.deepseek\.com)\//);
   }
 });
