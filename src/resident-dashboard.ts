@@ -1,8 +1,13 @@
 import { QuotaDashboard, type DashboardActions, type DashboardState } from "./dashboard.js";
 import { configDirectory } from "./config.js";
 
+/** Static assets are captured when the HTTP server first starts. Increment when the
+ * bundled dashboard changes, so /reload does not keep serving an older UI. */
+const ASSETS_VERSION = 5;
+
 /** Process-owned socket; session replacement swaps delegates without rebinding the listening port. */
 class ResidentDashboard {
+  readonly assetsVersion = ASSETS_VERSION;
   private actions?: DashboardActions;
   private owner?: object;
   private snapshots = new Map<string, DashboardState>();
@@ -58,6 +63,13 @@ const residents = registry[KEY] ??= new Map<string, ResidentDashboard>();
 export async function attachDashboard(owner: object, actions: DashboardActions, port: number): Promise<QuotaDashboard> {
   const key = configDirectory();
   let resident = residents.get(key);
+  if (resident && resident.assetsVersion !== ASSETS_VERSION) {
+    // A hot-reloaded extension can still find a server created by the previous
+    // module instance. Close it before binding the updated HTML/client assets.
+    await resident.server.stop();
+    residents.delete(key);
+    resident = undefined;
+  }
   if (!resident) { resident = new ResidentDashboard(); residents.set(key, resident); }
   try { return await resident.attach(owner, actions, port); }
   catch (error) {

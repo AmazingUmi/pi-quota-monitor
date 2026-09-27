@@ -6,6 +6,7 @@ import { dashboardFixture } from "./fixtures/dashboard-state.js";
 
 const html = readFileSync(new URL("../src/dashboard/index.html", import.meta.url), "utf8");
 const script = readFileSync(new URL("../src/dashboard/client.js", import.meta.url), "utf8");
+const css = readFileSync(new URL("../src/dashboard/style.css", import.meta.url), "utf8");
 const windows: JSDOM[] = [];
 afterEach(() => { for (const dom of windows.splice(0)) dom.window.close(); });
 
@@ -21,6 +22,23 @@ async function mount(state = dashboardFixture()) {
   const get = <T extends HTMLElement = HTMLElement>(id: string) => dom.window.document.getElementById(id) as T;
   return { dom, get, state, fetch, reload: () => dom.window.eval("load()") as Promise<void> };
 }
+
+it("shows three desktop quota cards with their own statusbar switches", async () => {
+  const { get } = await mount();
+  for (const [title, id] of [["codex-title", "show-oai"], ["claude-title", "show-claude"], ["agy-title", "show-agy"]]) {
+    const card = get(title).closest(".provider-card")!;
+    const switchInput = get<HTMLInputElement>(id);
+    expect(card.contains(switchInput)).toBe(true);
+    expect(switchInput.closest("label")?.textContent).toContain("pi-web 状态栏显示");
+    expect(switchInput.getAttribute("role")).toBe("switch");
+    expect(switchInput.nextElementSibling?.classList.contains("switch-track")).toBe(true);
+    expect(switchInput.checked).toBe(true);
+    expect(get("settings").contains(switchInput)).toBe(false);
+  }
+  expect(css).toMatch(/\.provider-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  expect(css).toContain(".switch-input:checked + .switch-track");
+  expect(css).toContain(".switch-input:focus-visible + .switch-track");
+});
 
 it("renders quota meters, compact totals, and distinct low-quota states", async () => {
   const { get, dom } = await mount();
@@ -41,9 +59,10 @@ it("shows OAI total alongside remaining estimates and charts recorded periods wi
   const { get, dom, state, reload } = await mount();
   const amounts = get("codex-windows").querySelector(".quota-money-values")!;
   expect(amounts.textContent).toContain("剩余估算$34.07");
-  expect(amounts.textContent).toContain("当期总金额估算$46.67");
+  expect(amounts.textContent).toContain("总额估算$46.67");
   expect(get("codex-windows").querySelector("summary")?.textContent).toBe("查看估算依据");
   expect(get("agy-windows").querySelector(".quota-money-values")).toBeNull();
+  expect(get("claude-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
   expect(get("codex-period-chart").querySelectorAll("circle")).toHaveLength(2);
   expect(get("codex-period-chart").querySelectorAll(".period-active")).toHaveLength(1);
   expect(get("codex-period-chart").querySelector(".chart-line")).toBeNull();
@@ -78,12 +97,12 @@ it("keeps both OAI amount labels visible while estimates are unavailable", async
   state.quotaEstimates.codex.weekly = { note: "等待同一周期的第二次额度读数。" };
   const { get, reload } = await mount(state);
   const weekly = get("codex-windows").querySelector(".quota-window")!;
-  expect(weekly.querySelector(".quota-money-values")?.textContent).toBe("剩余估算—当期总金额估算—");
+  expect(weekly.querySelector(".quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
   expect(weekly.textContent).toContain("等待同一周期的第二次额度读数");
   expect(weekly.querySelector("details")).toBeNull();
   state.quotaEstimates.codex.weekly = dashboardFixture().quotaEstimates.codex.weekly;
   await reload();
-  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("当期总金额估算$46.67");
+  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
 });
 
 it("preserves open amount details and focus across unchanged and changed cache polls", async () => {
@@ -144,6 +163,7 @@ it("does not reuse active Codex quota or money in other ledger views", async () 
   expect([...get("codex-windows").querySelectorAll("meter")].every((meter) => meter.hidden)).toBe(true);
   expect(get("codex-windows").querySelector("details")).toBeNull();
   expect(get("agy-windows").querySelector("meter")?.value).toBe(83);
+  expect(get("claude-windows").querySelector("meter")?.value).toBe(55);
 });
 
 it("distinguishes unknown, not-applicable, and zero quota, and keeps estimate warnings visible", async () => {
@@ -195,6 +215,10 @@ it("keeps refresh/settings actions authenticated and restores controls after fai
   await vi.waitFor(() => expect(get("feedback").textContent).toBe("保存失败"));
   expect(get<HTMLInputElement>("show-oai").checked).toBe(true);
   expect(get<HTMLInputElement>("show-oai").disabled).toBe(false);
+  get<HTMLInputElement>("show-claude").checked = false;
+  get("show-claude").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/statusbar", expect.objectContaining({ body: JSON.stringify({ showClaudeInStatusbar: false }) })));
+  await vi.waitFor(() => expect(get<HTMLInputElement>("show-claude").disabled).toBe(false));
 });
 
 it("reports a disconnected session and recovers on the next successful read", async () => {
@@ -297,14 +321,15 @@ it("normalizes and orders OAI/AGY windows without detaching their estimates or i
   expect(labels("agy-windows").slice(0, 2)).toEqual(labels("codex-windows"));
 });
 
-it("labels correlated quota amounts as conditional rather than verified Pi attribution", async () => {
+it("keeps correlated estimates visibly qualified while using the short amount labels", async () => {
   const state = dashboardFixture();
   state.quotaEstimates.codex.weekly.attribution = "correlated";
   state.quotaEstimates.codex.weekly.sampleIntervals = 2;
   state.quotaEstimates.codex.weekly.excludedIntervals = 1;
   state.quotaEstimates.codex.weekly.note = "同区间仍可能有外部消耗";
   const { get } = await mount(state);
-  expect(get("codex-windows").textContent).toContain("当期总金额条件估算");
+  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("剩余估算$34.07总额估算$46.67");
+  expect(get("codex-windows").textContent).toContain("条件估算 · 同区间可能含外部消耗");
   expect(get("codex-windows").textContent).toContain("账号额度下降");
   expect(get("codex-windows").textContent).toContain("2 个合格区间");
   expect(get("codex-windows").textContent).toContain("同区间仍可能有外部消耗");

@@ -41,6 +41,36 @@ it("groups all dates by provider and model, sorts by ledger total, and never add
   aggregator.stop();
 });
 
+it("reads ledgers written in another time zone and buckets by the reader's local date", async () => {
+  const previousTz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  try {
+    const dir = await fixture();
+    const writerDay = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const timestamp = Date.parse(`${writerDay}T01:00:00Z`);
+    const readerDay = localDate(timestamp);
+    expect(readerDay).not.toBe(writerDay);
+    const path = join(dir, `usage-${writerDay}.jsonl`);
+    const record = { ...entry(readerDay, "openai-codex", "gpt-6-sol"), timestamp, estimatedCostUsd: 2 };
+    await writeFile(path, line(record) + line({ ...record, timestamp: timestamp - 3 * 86_400_000 }));
+    const aggregator = new UsageAggregator(dir);
+    await aggregator.refresh();
+    expect(aggregator.state()).toMatchObject({ records: 1, invalidRecords: 1, totals: { totalTokens: 17 },
+      pricing: { estimatedCostUsd: 2, pricedRecords: 1 } });
+    expect(aggregator.state().timeline.days).toContainEqual(expect.objectContaining({ bucket: readerDay, totalTokens: 17, estimatedCostUsd: 2 }));
+    await appendFile(path, line({ ...record, timestamp: timestamp + 1000 }));
+    await aggregator.refresh();
+    expect(aggregator.state()).toMatchObject({ records: 2, invalidRecords: 1, totals: { totalTokens: 34 } });
+    expect(aggregator.state().timeline.days).toContainEqual(expect.objectContaining({ bucket: readerDay, totalTokens: 34, estimatedCostUsd: 4 }));
+    const restarted = new UsageAggregator(dir);
+    await restarted.refresh();
+    expect(restarted.state().totals).toEqual(aggregator.state().totals);
+  } finally {
+    if (previousTz === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTz;
+  }
+});
+
 it("sums per-record API-price estimates and keeps unknown models unpriced", async () => {
   const dir = await fixture();
   const path = join(dir, `usage-${day}.jsonl`);

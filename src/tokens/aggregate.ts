@@ -6,6 +6,7 @@ import { withLedgerLock } from "../history.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { localDate } from "./store.js";
+import { ledgerDateMatches } from "./ledger-date.js";
 import { estimateRecordCost, PRICE_DATE } from "./pricing.js";
 
 export interface ModelUsage extends TokenTotals {
@@ -32,6 +33,7 @@ export interface UsageSummary {
 interface PeriodCost {
   timestamp: number;
   provider: string;
+  accountId?: string;
   model: string;
   totalTokens: number;
   estimatedCostUsd: number;
@@ -59,6 +61,7 @@ interface FileState {
   records: number;
   invalidRecords: number;
   models: Map<string, ModelUsage>;
+  daily: Map<string, TimeBucket>;
   hours: Map<string, TimeBucket>;
   periodCosts: Map<string, PeriodCost>;
 }
@@ -71,7 +74,7 @@ const keyFor = (provider: string, model: string) => JSON.stringify([provider, mo
 function validRecord(value: unknown, day: string): value is TokenUsageRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<TokenUsageRecord>;
-  return typeof record.timestamp === "number" && Number.isFinite(record.timestamp) && localDate(record.timestamp) === day
+  return typeof record.timestamp === "number" && ledgerDateMatches(record.timestamp, day)
     && typeof record.provider === "string" && record.provider.length > 0
     && typeof record.model === "string" && record.model.length > 0
     && (["input", "output", "reasoning", "cacheRead", "cacheWrite", "totalTokens"] as const)
@@ -89,13 +92,19 @@ export class UsageAggregator {
 
   state(): UsageSummary { return this.summary; }
 
-  estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now(), modelFilter?: (model: string) => boolean): PeriodCostSummary {
+  estimateCostForPeriod(provider: string, startAt: number, endAt = Date.now(), modelFilter?: (model: string) => boolean, accountId?: string): PeriodCostSummary {
     const result: PeriodCostSummary = { totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0,
       unpricedRecords: 0, unpricedTokens: 0,
       ...(startAt < Date.now() - PERIOD_COST_RETENTION_MS ? { incompleteWindow: true } : {}) };
     for (const state of this.files.values()) {
       for (const item of state.periodCosts.values()) {
         if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt || (modelFilter && !modelFilter(item.model))) continue;
+        if (accountId && item.accountId !== accountId) {
+          // Unassigned local activity makes the calibration incomplete. Other
+          // identified accounts are separate and must not enter this account's cost.
+          if (!item.accountId) result.unpricedRecords += item.pricedRecords + item.unpricedRecords;
+          continue;
+        }
         result.totalTokens += item.totalTokens;
         result.estimatedCostUsd += item.estimatedCostUsd;
         result.pricedRecords += item.pricedRecords;
@@ -161,8 +170,8 @@ export class UsageAggregator {
         if (!stat.isFile()) continue;
         const previous = this.files.get(name);
         const state: FileState = previous && previous.dev === stat.dev && previous.ino === stat.ino && stat.size >= previous.offset
-          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), hours: new Map(previous.hours), periodCosts: new Map(previous.periodCosts) }
-          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), hours: new Map(), periodCosts: new Map() };
+          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), daily: new Map(previous.daily), hours: new Map(previous.hours), periodCosts: new Map(previous.periodCosts) }
+          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), daily: new Map(), hours: new Map(), periodCosts: new Map() };
         const day = FILE_NAME.exec(name)![1];
         if (stat.size > state.offset) {
           let bytes = 0;
@@ -190,7 +199,6 @@ export class UsageAggregator {
     let records = 0;
     let invalidRecords = 0;
     for (const [name, state] of files) {
-      const day = FILE_NAME.exec(name)![1];
       records += state.records;
       invalidRecords += state.invalidRecords;
       for (const item of state.models.values()) {
@@ -201,15 +209,14 @@ export class UsageAggregator {
           pricedRecords: (old?.pricedRecords ?? 0) + item.pricedRecords,
           unpricedRecords: (old?.unpricedRecords ?? 0) + item.unpricedRecords,
           unpricedTokens: (old?.unpricedTokens ?? 0) + item.unpricedTokens });
-        if (days.has(day)) {
-          const bucketKey = JSON.stringify([day, item.provider, item.model]);
-          const prior = daily.get(bucketKey);
-          daily.set(bucketKey, { bucket: day, provider: item.provider, model: item.model,
-            totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens,
-            estimatedCostUsd: (prior?.estimatedCostUsd ?? 0) + item.estimatedCostUsd,
-            pricedRecords: (prior?.pricedRecords ?? 0) + item.pricedRecords,
-            unpricedRecords: (prior?.unpricedRecords ?? 0) + item.unpricedRecords });
-        }
+      }
+      for (const [key, item] of state.daily) {
+        if (!days.has(item.bucket)) continue;
+        const prior = daily.get(key);
+        daily.set(key, { ...item, totalTokens: (prior?.totalTokens ?? 0) + item.totalTokens,
+          estimatedCostUsd: (prior?.estimatedCostUsd ?? 0) + item.estimatedCostUsd,
+          pricedRecords: (prior?.pricedRecords ?? 0) + item.pricedRecords,
+          unpricedRecords: (prior?.unpricedRecords ?? 0) + item.unpricedRecords });
       }
       for (const item of state.hours.values()) {
         if (Number(item.bucket) < firstHour || Number(item.bucket) > now) continue;
@@ -256,12 +263,13 @@ export class UsageAggregator {
           const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
           const cost = estimateRecordCost(value);
           if (value.timestamp >= Date.now() - PERIOD_COST_RETENTION_MS) {
-            const costKey = JSON.stringify([value.timestamp, value.provider, value.model]);
+            const costKey = JSON.stringify([value.timestamp, value.provider, value.model, value.accountId ?? null]);
             const periodCost = state.periodCosts.get(costKey);
             state.periodCosts.set(costKey, {
               timestamp: value.timestamp,
               provider: value.provider,
               model: value.model,
+              ...(value.accountId ? { accountId: value.accountId } : {}),
               totalTokens: (periodCost?.totalTokens ?? 0) + value.totalTokens,
               estimatedCostUsd: (periodCost?.estimatedCostUsd ?? 0) + (cost ?? 0),
               pricedRecords: (periodCost?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),
@@ -274,6 +282,14 @@ export class UsageAggregator {
             pricedRecords: prior.pricedRecords + (cost === undefined ? 0 : 1),
             unpricedRecords: prior.unpricedRecords + (cost === undefined ? 1 : 0),
             unpricedTokens: prior.unpricedTokens + (cost === undefined ? value.totalTokens : 0) });
+          const localDay = localDate(value.timestamp);
+          const dayKey = JSON.stringify([localDay, value.provider, value.model]);
+          const previousDay = state.daily.get(dayKey);
+          state.daily.set(dayKey, { bucket: localDay, provider: value.provider, model: value.model,
+            totalTokens: (previousDay?.totalTokens ?? 0) + value.totalTokens,
+            estimatedCostUsd: (previousDay?.estimatedCostUsd ?? 0) + (cost ?? 0),
+            pricedRecords: (previousDay?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),
+            unpricedRecords: (previousDay?.unpricedRecords ?? 0) + (cost === undefined ? 1 : 0) });
           const hour = Math.floor(value.timestamp / 3_600_000) * 3_600_000;
           if (hour >= Date.now() - 25 * 3_600_000) {
             const bucket = String(hour);

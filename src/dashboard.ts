@@ -7,7 +7,7 @@ import type { UsageSummary } from "./tokens/aggregate.js";
 import type { CodexPeriod } from "./codex-periods.js";
 import { PRICE_TABLE } from "./tokens/pricing.js";
 import { checkDashboardPort, DASHBOARD_HOST as HOST, DEFAULT_DASHBOARD_PORT, isDashboardPort, portErrorMessage } from "./dashboard-port.js";
-import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 export interface DashboardState {
   accounts?: Array<{ id: string; name: string }>;
@@ -18,6 +18,7 @@ export interface DashboardState {
   selectedAccountId?: string;
   currentAccountId?: string;
   codex: ProviderCache<CodexQuota>;
+  claude: ProviderCache<ClaudeQuota>;
   antigravity: ProviderCache<AntigravityQuota>;
   usage: UsageSummary;
   context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
@@ -33,7 +34,7 @@ export interface DashboardActions {
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
   setPort(port: number): Promise<void>;
-  setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>): Promise<void>;
+  setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar">>): Promise<void>;
 }
 
 function publicTotals(totals: TokenTotals): TokenTotals {
@@ -166,7 +167,7 @@ export class QuotaDashboard {
       } else if (pathname === "/favicon.svg") {
         reply(res, 200, assets.icon.toString("utf8"), "image/svg+xml; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, antigravity, usage, context, quotaEstimates, codexPeriods, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
+        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, antigravity, usage, context, quotaEstimates, codexPeriods, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
         const summary = {
           totals: publicTotals(usage.totals),
           models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
@@ -187,7 +188,7 @@ export class QuotaDashboard {
           },
           updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
         };
-        reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, antigravity, usage: summary,
+        reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
           quotaEstimates, codexPeriods: codexPeriods && (["fiveHour", "weekly"] as const)
             .flatMap((kind) => codexPeriods.filter((period) => period.kind === kind).slice(-24))
@@ -198,7 +199,7 @@ export class QuotaDashboard {
               estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, sampleIntervals, quotaChanges, excludedIntervals, attribution })),
           dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
           config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
-            showOaiInStatusbar: config.showOaiInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
+            showOaiInStatusbar: config.showOaiInStatusbar, showClaudeInStatusbar: config.showClaudeInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
       }
@@ -258,17 +259,17 @@ export class QuotaDashboard {
       let body: unknown;
       try { body = await readSmallJson(req); }
       catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
-      const allowed = new Set(["showOaiInStatusbar", "showAgyInStatusbar"]);
+      const allowed = new Set(["showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar"]);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         reply(res, 400, JSON.stringify({ error: "Invalid statusbar settings" }));
         return;
       }
       const entries = Object.entries(body);
       if (!entries.length || entries.some(([key, value]) => !allowed.has(key) || typeof value !== "boolean")) {
-        reply(res, 400, JSON.stringify({ error: "Statusbar settings must contain boolean OAI/AGY options" }));
+        reply(res, 400, JSON.stringify({ error: "Statusbar settings must contain boolean OAI/CLA/AGY options" }));
         return;
       }
-      await this.actions.setStatusbar(Object.fromEntries(entries) as Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>);
+      await this.actions.setStatusbar(Object.fromEntries(entries) as Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar">>);
     } else {
       reply(res, 404, JSON.stringify({ error: "Not found" }));
       return;

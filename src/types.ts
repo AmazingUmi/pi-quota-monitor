@@ -12,6 +12,12 @@ export interface CodexQuota {
   weekly?: QuotaWindow;
 }
 
+export interface ClaudeQuota {
+  capturedAt: number;
+  fiveHour?: QuotaWindow;
+  weekly?: QuotaWindow;
+}
+
 export interface AntigravityQuotaGroup {
   name: string;
   windows: QuotaWindow[];
@@ -92,6 +98,7 @@ export interface QuotaAmountEstimate {
 export interface QuotaAmountEstimates {
   codex: { fiveHour: QuotaAmountEstimate; weekly: QuotaAmountEstimate };
   antigravity: { groups: Array<{ name: string; windows: Array<QuotaAmountEstimate | null> }> };
+  claude: { fiveHour: QuotaAmountEstimate; weekly: QuotaAmountEstimate };
 }
 
 export interface MonitorConfig {
@@ -102,4 +109,5 @@ export interface MonitorConfig {
   showReset: boolean;
   showOaiInStatusbar: boolean;
   showAgyInStatusbar: boolean;
+  showClaudeInStatusbar: boolean;
 }

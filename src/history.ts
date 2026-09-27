@@ -5,10 +5,7 @@ import lockfile from "proper-lockfile";
 import { configDirectory, usageDirectory } from "./config.js";
 import { accountId, credential, listAccounts } from "./accounts.js";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
-function localDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
+import { ledgerDateMatches } from "./tokens/ledger-date.js";
 
 const LEDGER = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/;
 const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -83,7 +80,7 @@ function validLine(line: string, filename: string): boolean {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     const record = value as Record<string, unknown>;
     const day = filename.slice(6, 16);
-    return typeof record.timestamp === "number" && Number.isFinite(record.timestamp) && localDate(record.timestamp) === day
+    return typeof record.timestamp === "number" && ledgerDateMatches(record.timestamp, day)
       && typeof record.provider === "string" && !!record.provider
       && typeof record.model === "string" && !!record.model
       && (record.accountId === undefined || accountId(record) !== undefined)

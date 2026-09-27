@@ -1,4 +1,4 @@
-import type { AntigravityQuota, CodexQuota, ProviderCache, QuotaWindow, TokenTotals } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, ProviderCache, QuotaWindow, TokenTotals } from "./types.js";
 
 export function compactTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`;
@@ -43,7 +43,8 @@ export function formatStatus(
   totals: TokenTotals,
   showReset: boolean,
   now = Date.now(),
-  visibility: { showOai?: boolean; showAgy?: boolean } = {},
+  visibility: { showOai?: boolean; showAgy?: boolean; showClaude?: boolean } = {},
+  claude?: ProviderCache<ClaudeQuota>,
 ): string {
   const geminiFiveHour = geminiTimedWindow(antigravity.value, "fiveHour");
   const geminiWeekly = geminiTimedWindow(antigravity.value, "weekly");
@@ -57,6 +58,12 @@ export function formatStatus(
     const fiveHour = percentage(codex.value?.fiveHour?.remainingPercent, "-");
     const weekly = percentage(codex.value?.weekly?.remainingPercent, "-");
     parts.push(`OAI ${fiveHour}/${weekly}${codexReset ? ` ↻${codexReset}` : ""}`);
+  }
+  if (claude && visibility.showClaude !== false) {
+    const fiveHour = percentage(claude.value?.fiveHour?.remainingPercent, "-");
+    const weekly = percentage(claude.value?.weekly?.remainingPercent, "-");
+    const reset = showReset ? countdown(claude.value?.fiveHour?.resetAt, now) : undefined;
+    parts.push(`CLA ${fiveHour}/${weekly}${reset ? ` ↻${reset}` : ""}`);
   }
   if (visibility.showAgy !== false) {
     parts.push(`AGY ${percentage(geminiFiveHour?.remainingPercent, "-")}/${percentage(geminiWeekly?.remainingPercent, "-")}${geminiReset ? ` ↻${geminiReset}` : ""}`);
@@ -76,17 +83,21 @@ export function formatDetails(
   session: TokenTotals,
   daily: TokenTotals,
   interval: number,
+  claude?: ProviderCache<ClaudeQuota>,
 ): string {
   const codexResult = codex.value;
   const agy = antigravity.value;
   const lines = [
     `Quota monitor · refresh every ${interval}s`,
     `Codex${codexResult?.plan ? ` (${codexResult.plan})` : ""}: 5h ${codexResult?.plan?.toLowerCase() === "pro" && !codexResult.fiveHour ? "not applicable" : formatWindow(codexResult?.fiveHour)}; weekly ${formatWindow(codexResult?.weekly)}`,
+    ...(claude ? [`Claude: 5h ${formatWindow(claude.value?.fiveHour)}; weekly ${formatWindow(claude.value?.weekly)}`] : []),
     `Antigravity${agy?.plan ? ` (${agy.plan})` : ""}: Gemini ${formatWindow(groupWindow(agy, "gemini"))}; Claude/GPT ${formatWindow(groupWindow(agy, "shared"))}`,
     `Session: input ${session.input}, output ${session.output}, reasoning ${session.reasoning}, cacheRead ${session.cacheRead}, cacheWrite ${session.cacheWrite}, total ${session.totalTokens}`,
     `Today: input ${daily.input}, output ${daily.output}, reasoning ${daily.reasoning}, cacheRead ${daily.cacheRead}, cacheWrite ${daily.cacheWrite}, total ${daily.totalTokens}`,
   ];
   if (codexResult) lines.push(`Codex updated ${new Date(codexResult.capturedAt).toLocaleString()}`);
+  if (claude?.value) lines.push(`Claude updated ${new Date(claude.value.capturedAt).toLocaleString()}`);
+  if (claude?.error) lines.push(`Claude: ${claude.error}${claude.value ? " (showing last successful result)" : ""}`);
   if (agy) lines.push(`Antigravity updated ${new Date(agy.capturedAt).toLocaleString()}`);
   if (codex.error) lines.push(`Codex: ${codex.error}${codexResult ? " (showing last successful result)" : ""}`);
   if (antigravity.error) lines.push(`Antigravity: ${antigravity.error}${agy ? " (showing last successful result)" : ""}`);

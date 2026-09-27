@@ -17,12 +17,15 @@ vi.mock("../src/config.js", async (importOriginal) => {
 
 const oldDir = process.env.PI_CODING_AGENT_DIR;
 const oldOffline = process.env.PI_OFFLINE;
+const oldTz = process.env.TZ;
 const dirs: string[] = [];
 afterEach(async () => {
   if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = oldDir;
   if (oldOffline === undefined) delete process.env.PI_OFFLINE;
   else process.env.PI_OFFLINE = oldOffline;
+  if (oldTz === undefined) delete process.env.TZ;
+  else process.env.TZ = oldTz;
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 const auth = (id: string) => ({ type: "oauth", accountId: id, access: `access-${id}`, refresh: `refresh-${id}`, expires: Date.now() + 3_600_000 });
@@ -142,6 +145,28 @@ it("isolates Codex ledger and cost, leaves old entries unassigned, and restores 
   await writeFile(corrupted, JSON.stringify({ schema: 1, profiles: [], ledgers: { "../auth.json": "{}" } }));
   await expect(importHistory(corrupted)).rejects.toThrow("Invalid backup ledger");
   expect((await readFile(ledger, "utf8")).split("\n").filter(Boolean)).toHaveLength(3);
+});
+
+it("keeps cross-time-zone records in daily usage, backup import and account reset", async () => {
+  process.env.TZ = "America/Los_Angeles";
+  const { dir } = await setup();
+  await saveAccount("pro");
+  const root = join(dir, "pi-quota-monitor");
+  const writerDay = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const timestamp = Date.parse(`${writerDay}T01:00:00Z`);
+  const readerDay = localDate(timestamp);
+  expect(readerDay).not.toBe(writerDay);
+  const path = join(root, "usage", `usage-${writerDay}.jsonl`);
+  await mkdir(join(root, "usage"));
+  await writeFile(path, JSON.stringify({ ...record("pro-id"), timestamp }) + "\n");
+  const view = new UsageAggregator();
+  await view.refresh();
+  expect(view.state()).toMatchObject({ records: 1, invalidRecords: 0 });
+  expect((await readDailyUsage(readerDay, "pro-id")).totalTokens).toBe(110);
+  const backup = await backupHistory();
+  expect((await resetAccountUsage("pro-id")).removed).toBe(1);
+  expect((await importHistory(backup)).records).toBe(1);
+  expect((await readDailyUsage(readerDay, "pro-id")).totalTokens).toBe(110);
 });
 
 it("merges colliding legacy and usage/ ledgers once, and keeps backup, reset and restore consistent", async () => {

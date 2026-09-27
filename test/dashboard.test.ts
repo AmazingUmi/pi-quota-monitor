@@ -7,6 +7,7 @@ afterEach(async () => { await Promise.all(running.splice(0).map((dashboard) => d
 
 const state: DashboardState = {
   codex: { value: { capturedAt: 1000, fiveHour: { label: "5h", remainingPercent: 73 } } },
+  claude: { value: { capturedAt: 1000, weekly: { label: "weekly", remainingPercent: 65 } } },
   antigravity: { error: "Query failed" },
   usage: { totals: { input: 200, output: 40, reasoning: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 240 }, models: [
     { provider: "openai-codex", model: "gpt", input: 200, output: 40, reasoning: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 240,
@@ -15,16 +16,16 @@ const state: DashboardState = {
   pricing: { asOf: "2026-09-23", estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 1, unpricedTokens: 240 },
   records: 1, invalidRecords: 0, updatedAt: Date.now(), stale: false },
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
-  quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
+  quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, claude: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
   config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
-    showOaiInStatusbar: true, showAgyInStatusbar: true },
+    showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true },
   updatedAt: Date.now(),
 };
 
 it("serves a loopback-only, credential-free dashboard and closes on shutdown", async () => {
   const refresh = vi.fn(async () => {});
   const setInterval = vi.fn(async (seconds: number) => { state.config.refreshIntervalSeconds = seconds; });
-  const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showAgyInStatusbar">>) => { Object.assign(state.config, settings); });
+  const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar">>) => { Object.assign(state.config, settings); });
   const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval, setStatusbar, setPort: async () => {} });
   running.push(dashboard);
   const origin = await dashboard.start(0);
@@ -57,6 +58,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("两次已保存读数之间的 Token 时间戳匹配账本金额");
   expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
   expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
+  expect(html).toContain("在 pi-web 扩展状态栏显示 CLA");
+  expect(html).toContain('id="claude-windows"');
   for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
     "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
     "account-save-form", "account-import-form", "account-manage-profile", "account-delete",
@@ -106,6 +109,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const result = await fetch(`${origin}/api/state`);
   const payload = await result.json() as DashboardState & { control: string };
   expect(payload.codex.value?.fiveHour?.remainingPercent).toBe(73);
+  expect(payload.claude.value?.weekly?.remainingPercent).toBe(65);
   expect(payload.usage.models[0]?.provider).toBe("openai-codex");
   expect(payload.usage.totals.totalTokens).toBe(240);
   expect(payload.usage.timeline.hours[0]).toEqual({ bucket: state.usage.timeline.hours[0].bucket, provider: "openai-codex", model: "gpt", totalTokens: 240,
@@ -119,8 +123,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(JSON.stringify(payload)).not.toContain("/usage-");
   expect(JSON.stringify(payload)).not.toContain("/secret/");
   expect(JSON.stringify(payload)).not.toContain("credential");
-  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showAgyInStatusbar"]);
-  expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showAgyInStatusbar: true });
+  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar"]);
+  expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true });
   expect(Object.keys(payload.usage)).toEqual(["totals", "models", "pricing", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
   const blocked = await fetch(`${origin}/api/refresh`, { method: "POST", headers: { Origin: "https://evil.example", "X-Quota-Control": payload.control } });
@@ -147,6 +151,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   const savedStatusbar = await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showOaiInStatusbar: false }) });
   expect(savedStatusbar.status).toBe(200);
   expect(setStatusbar).toHaveBeenCalledWith({ showOaiInStatusbar: false });
+  expect((await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showClaudeInStatusbar: false }) })).status).toBe(200);
+  expect(setStatusbar).toHaveBeenCalledWith({ showClaudeInStatusbar: false });
   const refreshed = await fetch(`${origin}/api/refresh`, { method: "POST", headers });
   expect(refreshed.status).toBe(200);
   expect(refresh).toHaveBeenCalledOnce();

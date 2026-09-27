@@ -4,6 +4,7 @@ import { usageDirectory } from "../config.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { withLedgerLock } from "../history.js";
+import { ledgerDateMatches } from "./ledger-date.js";
 
 export function localDate(timestamp: number): string {
   const now = new Date(timestamp);
@@ -52,21 +53,31 @@ export async function appendUsage(record: TokenUsageRecord): Promise<boolean> {
 
 export async function readDailyUsage(day = localDate(Date.now()), accountId?: string | null): Promise<TokenTotals> {
   return withLedgerLock(async () => {
-    let content: string;
-    try { content = await readFile(ledgerPath(day), "utf8"); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyTotals();
-      throw error;
+    const midnight = Date.parse(`${day}T00:00:00Z`);
+    if (!Number.isFinite(midnight)) return emptyTotals();
+    let totals = emptyTotals();
+    // The filename is the writer's local date. A reader in another time zone
+    // can see that same timestamp up to two civil days away from the filename.
+    for (let offset = -2; offset <= 2; offset++) {
+      const fileDay = new Date(midnight + offset * 86_400_000).toISOString().slice(0, 10);
+      let content: string;
+      try { content = await readFile(ledgerPath(fileDay), "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const line of content.split("\n")) {
+        if (!line) continue;
+        try {
+          const record = JSON.parse(line) as TokenUsageRecord;
+          if (typeof record.timestamp !== "number" || !ledgerDateMatches(record.timestamp, fileDay) || localDate(record.timestamp) !== day
+            || ![record.input, record.output, record.reasoning, record.cacheRead, record.cacheWrite, record.totalTokens].every(Number.isFinite)) continue;
+          if (record.provider === "openai-codex" && accountId !== undefined
+            && (accountId === null ? record.accountId !== undefined : record.accountId !== accountId)) continue;
+          totals = accumulate(totals, record);
+        } catch { /* Ignore malformed rows as before. */ }
+      }
     }
-    return content.split("\n").reduce((totals, line) => {
-      if (!line) return totals;
-      try {
-        const record = JSON.parse(line) as TokenUsageRecord;
-        if (localDate(record.timestamp) !== day || ![record.input, record.output, record.reasoning, record.cacheRead, record.cacheWrite, record.totalTokens].every(Number.isFinite)) return totals;
-        if (record.provider === "openai-codex" && accountId !== undefined
-          && (accountId === null ? record.accountId !== undefined : record.accountId !== accountId)) return totals;
-        return accumulate(totals, record);
-      } catch { return totals; }
-    }, emptyTotals());
+    return totals;
   });
 }

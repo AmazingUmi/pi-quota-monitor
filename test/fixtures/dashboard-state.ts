@@ -23,6 +23,7 @@ export function dashboardFixture() {
     profiles: [{ name: "work-pro", accountId: "pro" }, { name: "personal-plus", accountId: "plus" }],
     currentProfile: "work-pro", currentAccountId: "account:pro", selectedAccountId: "account:pro", backups: ["/private/demo-backup.json"],
     codex: { value: { capturedAt: now, plan: "plus", fiveHour: { label: "5h", remainingPercent: 73, resetAt: now + 4800000 }, weekly: { label: "weekly", remainingPercent: 61, resetAt: now + 172800000 } } },
+    claude: { value: { capturedAt: now, fiveHour: { label: "5h", remainingPercent: 80, resetAt: now + 4800000 }, weekly: { label: "weekly", remainingPercent: 55, resetAt: now + 172800000 } } },
     antigravity: { value: { capturedAt: now, plan: "AI Pro", models: [], groups: [
       { name: "Gemini", windows: [{ label: "5 小时窗口", remainingPercent: 95, resetAt: now + 7200000 }, { label: "每周窗口", remainingPercent: 83, resetAt: now + 345600000 }] },
       { name: "Claude / GPT", windows: [{ label: "5 小时窗口", remainingPercent: 20, resetAt: now + 3600000 }, { label: "每周窗口", remainingPercent: 8, resetAt: now + 86400000 }] },
@@ -34,7 +35,7 @@ export function dashboardFixture() {
       records: 128, invalidRecords: 0, updatedAt: now, stale: false,
     },
     context: { tokens: 70720, contextWindow: 272000, percent: 26 },
-    quotaEstimates: { codex: { fiveHour: estimate, weekly: estimate }, antigravity: { groups: [{ name: "Gemini", windows: [estimate, estimate] }, { name: "Claude / GPT", windows: [estimate, estimate] }] } },
+    quotaEstimates: { codex: { fiveHour: estimate, weekly: estimate }, claude: { fiveHour: estimate, weekly: estimate }, antigravity: { groups: [{ name: "Gemini", windows: [estimate, estimate] }, { name: "Claude / GPT", windows: [estimate, estimate] }] } },
     codexPeriods: [
       { id: `weekly:${now - 8 * 86_400_000}`, kind: "weekly", plan: "plus", startedAt: now - 8 * 86_400_000,
         lastAt: now - 7 * 86_400_000, closedAt: now - 6 * 86_400_000, boundary: "increase", remainingPercent: 12, estimatedTotalUsd: 40, estimateAsOf: now - 7 * 86_400_000 },
@@ -43,7 +44,7 @@ export function dashboardFixture() {
       { id: `weekly:${now - 4 * 86_400_000}`, kind: "weekly", plan: "plus", startedAt: now - 4 * 86_400_000,
         lastAt: now, remainingPercent: 61, estimatedTotalUsd: 46.67, estimateAsOf: now },
     ],
-    config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true, showOaiInStatusbar: true, showAgyInStatusbar: true },
+    config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true, showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true },
     updatedAt: now,
   };
   return { ...state, control: "test-control", usage: { ...state.usage, pricing: { ...state.usage.pricing, catalog: [

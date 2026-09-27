@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: MonitorConfig = {
   showReset: true,
   showOaiInStatusbar: true,
   showAgyInStatusbar: true,
+  showClaudeInStatusbar: true,
 };
 
 export function configDirectory(): string {
@@ -43,6 +44,7 @@ export function normalizeConfig(value: unknown): MonitorConfig {
     // Older config files predate these switches; keep the historical statusbar behavior.
     showOaiInStatusbar: typeof record.showOaiInStatusbar === "boolean" ? record.showOaiInStatusbar : DEFAULT_CONFIG.showOaiInStatusbar,
     showAgyInStatusbar: typeof record.showAgyInStatusbar === "boolean" ? record.showAgyInStatusbar : DEFAULT_CONFIG.showAgyInStatusbar,
+    showClaudeInStatusbar: typeof record.showClaudeInStatusbar === "boolean" ? record.showClaudeInStatusbar : DEFAULT_CONFIG.showClaudeInStatusbar,
   };
 }
 

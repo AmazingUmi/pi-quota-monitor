@@ -1,4 +1,4 @@
-import type { AntigravityQuota, CodexQuota, ProviderCache, QuotaAmountEstimate, QuotaAmountEstimates, QuotaWindow } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, ProviderCache, QuotaAmountEstimate, QuotaAmountEstimates, QuotaWindow } from "./types.js";
 import type { PeriodCostSummary, UsageAggregator } from "./tokens/aggregate.js";
 
 export const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
@@ -165,17 +165,24 @@ export function quotaAmountEstimates(
   aggregator: UsageAggregator,
   codex: ProviderCache<CodexQuota>, antigravity: ProviderCache<AntigravityQuota>,
   codexHistory: CodexQuota[], agyHistory: AntigravityQuota[],
+  claude: ProviderCache<ClaudeQuota> = {}, claudeHistory: ClaudeQuota[] = [], claudeAccountId?: string,
 ): QuotaAmountEstimates {
   const now = Date.now();
   const stale = aggregator.state().stale;
   const codexSamples = codex.value ? [...codexHistory.filter((q) => q.capturedAt < codex.value!.capturedAt), codex.value] : [];
   const agySamples = antigravity.value ? [...agyHistory.filter((q) => q.capturedAt < antigravity.value!.capturedAt), antigravity.value] : [];
+  const claudeSamples = claude.value ? [...claudeHistory.filter((q) => q.capturedAt < claude.value!.capturedAt), claude.value] : [];
+  const claudeEstimate = (key: "fiveHour" | "weekly", duration: number): QuotaAmountEstimate => claudeAccountId
+    ? estimateQuotaAmount(claudeSamples.map((q) => ({ capturedAt: q.capturedAt, window: q[key] })), duration,
+      (start, end) => aggregator.estimateCostForPeriod("anthropic", start, end, undefined, claudeAccountId), now, stale, true)
+    : { note: "无法确认当前 Claude OAuth 账号身份，暂不估算金额。" };
   const codexEstimate = (key: "fiveHour" | "weekly", duration: number) => estimateQuotaAmount(
     codexSamples.map((q) => ({ capturedAt: q.capturedAt, window: q.plan === codex.value?.plan ? q[key] : undefined })), duration,
     (start, end) => aggregator.estimateCostForPeriod("openai-codex", start, end), now, stale, true);
   return {
     codex: { fiveHour: codexEstimate("fiveHour", (codex.value?.fiveHour?.windowMinutes ?? 300) * 60_000),
       weekly: codexEstimate("weekly", (codex.value?.weekly?.windowMinutes ?? 10080) * 60_000) },
+    claude: { fiveHour: claudeEstimate("fiveHour", FIVE_HOURS_MS), weekly: claudeEstimate("weekly", ONE_WEEK_MS) },
     antigravity: { groups: (antigravity.value?.groups ?? []).map((group) => ({ name: group.name,
       windows: group.windows.map((window) => {
         const duration = window.windowMinutes ? window.windowMinutes * 60_000 : antigravityWindowDuration(window.label);

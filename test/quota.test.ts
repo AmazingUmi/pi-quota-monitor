@@ -236,8 +236,9 @@ it("bounds user-configurable refresh interval", () => {
 it("defaults missing statusbar options on for old configs and validates explicit booleans", () => {
   expect(normalizeConfig({}).showOaiInStatusbar).toBe(true);
   expect(normalizeConfig({}).showAgyInStatusbar).toBe(true);
-  expect(normalizeConfig({ showOaiInStatusbar: false, showAgyInStatusbar: "false" })).toMatchObject({
-    showOaiInStatusbar: false, showAgyInStatusbar: true,
+  expect(normalizeConfig({}).showClaudeInStatusbar).toBe(true);
+  expect(normalizeConfig({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: "false" })).toMatchObject({
+    showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: true,
   });
 });
 

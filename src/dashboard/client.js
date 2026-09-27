@@ -107,8 +107,8 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
   if (showTotal && !notApplicable) {
     const amounts = document.createElement("div");
     amounts.className = "quota-money-values";
-    for (const [name, value] of [[estimate?.attribution === "correlated" ? "剩余条件估算" : "剩余估算", estimate?.estimatedRemainingUsd],
-      [estimate?.attribution === "correlated" ? "当期总金额条件估算" : "当期总金额估算", estimate?.estimatedPeriodUsd]]) {
+    for (const [name, value] of [["剩余估算", estimate?.estimatedRemainingUsd],
+      ["总额估算", estimate?.estimatedPeriodUsd]]) {
       const item = document.createElement("div");
       const caption = document.createElement("span");
       caption.textContent = name;
@@ -127,7 +127,7 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
     const summary = document.createElement("summary");
     const detail = document.createElement("p");
     if (estimated) {
-      summary.textContent = showTotal ? "查看估算依据" : `${estimate.attribution === "correlated" ? "剩余条件估算" : "剩余估算"} ${money(estimate.estimatedRemainingUsd)}`;
+      summary.textContent = showTotal ? "查看估算依据" : `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
       const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ${estimate.sampleIntervals ?? 1} 个合格区间${estimate.quotaChanges ? ` / ${estimate.quotaChanges} 次额度下降` : ""}（范围内可能有排除区间） · ` : "";
       const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
       detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
@@ -137,6 +137,12 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
     }
     amount.append(summary, detail);
     container.append(amount);
+  }
+  if (estimated && estimate?.attribution === "correlated" && !notApplicable) {
+    const caveat = document.createElement("small");
+    caveat.className = "quota-estimate-note";
+    caveat.textContent = "条件估算 · 同区间可能含外部消耗";
+    container.append(caveat);
   }
   if (estimate && !notApplicable && (estimate.unpricedRecords || estimate.ledgerStale)) {
     const warning = document.createElement("small");
@@ -209,6 +215,17 @@ function renderCodex(cache) {
   });
   $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
   renderProviderErrors($("codex-error"), viewingCurrent ? cache : {});
+}
+function renderClaude(cache) {
+  const result = cache?.value;
+  $("claude-plan").textContent = result ? "Pi 当前登录的 Claude OAuth 账号 · 与 Codex 账本视图无关" : "等待 Pi 的 Claude OAuth 额度数据";
+  const windows = $("claude-windows");
+  updateQuotaContent(windows, [result, latest.quotaEstimates?.claude], "claude", () => {
+    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, latest.quotaEstimates?.claude?.weekly, false, true);
+    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, latest.quotaEstimates?.claude?.fiveHour, false, true);
+  });
+  $("claude-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  renderProviderErrors($("claude-error"), cache);
 }
 function modelGroupName(model) {
   const name = `${model.modelId} ${model.displayName ?? ""}`;
@@ -532,12 +549,16 @@ function render() {
   const codex = latest.codex;
   const agy = latest.antigravity;
   renderCodex(codex);
+  renderClaude(latest.claude ?? {});
   renderAntigravity(agy);
   renderCodexPeriodChart();
   const codexStatus = $("codex-query-status");
   codexStatus.replaceChildren();
   if (latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId) statusDetails(codexStatus, codex);
   else row(codexStatus, "查询状态", "所选视图无法查询实时 Codex 额度");
+  const claudeStatus = $("claude-query-status");
+  claudeStatus.replaceChildren();
+  statusDetails(claudeStatus, latest.claude ?? {});
   const agyStatus = $("agy-query-status");
   agyStatus.replaceChildren();
   statusDetails(agyStatus, agy, [agy.value?.summaryError]);
@@ -625,6 +646,7 @@ function render() {
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
   if (!busy) {
     $("show-oai").checked = latest.config.showOaiInStatusbar;
+    $("show-claude").checked = latest.config.showClaudeInStatusbar;
     $("show-agy").checked = latest.config.showAgyInStatusbar;
   }
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
@@ -696,11 +718,12 @@ function loadError(error) {
 function syncStatusbarControls() {
   if (!latest) return;
   $("show-oai").checked = latest.config.showOaiInStatusbar;
+  $("show-claude").checked = latest.config.showClaudeInStatusbar;
   $("show-agy").checked = latest.config.showAgyInStatusbar;
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-agy", "account-add", "account-history",
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-claude", "show-agy", "account-add", "account-history",
     "account-name", "account-import-name", "account-import-path", "backup-location", "backup-directory", "backup-restore-path",
     "account-backup-create", "account-restore-path", "dashboard-port", "port-check", "port-submit", "port-use-current"]) $(id).disabled = value;
   $("refresh").textContent = value ? "处理中…" : "↻ 刷新额度";
@@ -878,6 +901,9 @@ $("interval-form").addEventListener("submit", (event) => {
 });
 $("show-oai").addEventListener("change", (event) => {
   void action("/api/statusbar", { showOaiInStatusbar: event.currentTarget.checked });
+});
+$("show-claude").addEventListener("change", (event) => {
+  void action("/api/statusbar", { showClaudeInStatusbar: event.currentTarget.checked });
 });
 $("show-agy").addEventListener("change", (event) => {
   void action("/api/statusbar", { showAgyInStatusbar: event.currentTarget.checked });

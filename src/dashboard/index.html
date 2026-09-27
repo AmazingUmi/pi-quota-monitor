@@ -46,7 +46,7 @@
         <div class="help-tip"><button class="help-button" type="button" aria-label="关于数据" aria-describedby="data-help" aria-controls="data-help" aria-expanded="false">?</button>
           <div id="data-help" class="help-tooltip" role="tooltip" hidden><strong>关于数据</strong><p>仅统计插件启用后的记录 · 费用非订阅实付</p>
             <p>账本不覆盖插件启用前的历史。Reasoning 是 Output 的子集，不会重复计入 Total tokens。当前上下文对应正在运行的 Pi 会话，不随账本视图切换。</p>
-            <p>费用按账本 Token 和公开 API 标价估算，不是 Codex / Antigravity 订阅实付或账户预算上限；未知价格、缓存存储时长、非文本用量、工具调用、订阅折扣和历史价格变化可能导致估算不完整。</p>
+            <p>费用按账本 Token 和公开 API 标价估算，不是 Codex / Claude / Antigravity 订阅实付或账户预算上限；未知价格、缓存存储时长、非文本用量、工具调用、订阅折扣和历史价格变化可能导致估算不完整。</p>
             <p>控制台在 Pi 进程内常驻，不随对话切换关闭；只绑定本机 127.0.0.1，不展示凭据或原始账本。页面只读取本地缓存，不因页面轮询而额外查询 Provider。</p>
           </div>
         </div>
@@ -62,7 +62,7 @@
       <div class="section-heading"><div><p class="eyebrow">LIVE QUOTA</p><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
-            <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Antigravity 额度独立于 Codex 账号，在各视图共享。</p>
+            <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。</p>
             <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算当期总金额与剩余金额；不会直接除以本周期全部已用额度。OAI 额度增加或重置时间明显变化时开始新一期，不假定每期固定为 5 小时或 7 天；起点只是首次观察时间。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
@@ -74,14 +74,24 @@
           <div class="quota-groups"><section class="quota-group"><h4>订阅额度</h4><div id="codex-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
           <p id="codex-success" class="provider-meta">等待查询</p>
           <div id="codex-error" aria-live="polite"></div>
+          <label class="provider-status-toggle toggle"><input id="show-oai" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 OAI</span></label>
+        </article>
+        <article class="provider-card panel" aria-labelledby="claude-title">
+          <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><div><h3 id="claude-title">Claude</h3><p id="claude-plan" class="hint">等待额度数据</p></div><span class="provider-tag">当前 OAuth 账号</span></header>
+          <div class="quota-groups"><section class="quota-group"><h4>订阅额度</h4><div id="claude-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
+          <p id="claude-success" class="provider-meta">等待查询</p>
+          <div id="claude-error" aria-live="polite"></div>
+          <label class="provider-status-toggle toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 CLA</span></label>
         </article>
         <article class="provider-card panel" aria-labelledby="agy-title">
           <header class="provider-heading"><span class="provider-icon agy-icon" aria-hidden="true">A</span><div><h3 id="agy-title">Antigravity</h3><p id="agy-plan" class="hint">等待额度数据</p></div><span class="provider-tag">共享额度</span></header>
           <div id="agy-windows" class="quota-groups"><p class="hint">正在读取额度…</p></div>
           <p id="agy-success" class="provider-meta">等待查询</p>
           <div id="agy-error" aria-live="polite"></div>
+          <label class="provider-status-toggle toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 AGY</span></label>
         </article>
       </div>
+      <p class="quota-status-hint hint">开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
       <details id="codex-period-details" class="panel period-panel">
         <summary><span class="period-toggle-title">OAI 当期总金额估算 · 逐期变化</span><span class="period-toggle-hint period-collapsed-hint">展开查看历史趋势</span><span class="period-toggle-hint period-expanded-hint">收起历史趋势</span></summary>
         <div class="period-content">
@@ -116,11 +126,12 @@
     </section>
 
     <details id="settings" class="settings-panel panel">
-      <summary>状态与设置 <span class="summary-note">端口、查询状态、刷新频率与状态栏</span></summary>
+      <summary>状态与设置 <span class="summary-note">端口、查询状态与刷新频率</span></summary>
       <div class="settings-content">
         <p class="hint">Provider 状态为只读信息。后台间隔控制额度查询频率；页面每 5 秒读取本地缓存和账本增量，不会额外调用 Provider API。</p>
         <div class="provider-status-grid" aria-label="Provider 查询状态">
           <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div></article>
+          <article class="provider-status"><h3>Claude</h3><div id="claude-query-status"></div></article>
           <article class="provider-status"><h3>Antigravity</h3><div id="agy-query-status"></div></article>
         </div>
         <form id="port-form" class="port-settings"><label for="dashboard-port">控制台端口（1024–65535，下次启动生效）</label>
@@ -129,11 +140,6 @@
           <p id="port-feedback" class="hint" role="status" aria-live="polite"></p>
         </form>
         <form id="interval-form"><label for="interval">后台刷新间隔（秒，60–3600）</label><div class="form-row"><input id="interval" type="number" min="60" max="3600" step="1" required><button id="interval-submit" type="submit">保存间隔</button></div></form>
-        <fieldset class="statusbar-settings"><legend>pi-web 扩展状态栏显示</legend>
-          <label class="toggle"><input id="show-oai" type="checkbox"><span>在 pi-web 扩展状态栏显示 OAI</span></label>
-          <label class="toggle"><input id="show-agy" type="checkbox"><span>在 pi-web 扩展状态栏显示 AGY</span></label>
-        </fieldset>
-        <p class="hint">开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出。TUI 状态栏保持原有行为。</p>
       </div>
     </details>
     <footer><span id="last-check">连接本地 Pi 会话中…</span><span>Pi Quota Monitor <span aria-hidden="true">/</span> Local-first</span></footer>

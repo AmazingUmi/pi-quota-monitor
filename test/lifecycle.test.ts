@@ -8,6 +8,8 @@ import { createServer, type AddressInfo } from "node:net";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config.js";
 import quotaMonitor from "../src/index.js";
 import { appendUsage } from "../src/tokens/store.js";
+import { attachDashboard, detachDashboard } from "../src/resident-dashboard.js";
+import { dashboardFixture } from "./fixtures/dashboard-state.js";
 
 const stored = vi.hoisted(() => ({ root: "", account: "test-account", data: new Map<string, Array<CodexQuota | AntigravityQuota>>(), saved: vi.fn() }));
 vi.mock("../src/quota-readings.js", () => ({ QuotaReadings: class {
@@ -76,8 +78,8 @@ it("emits a pi-web-compatible RPC status, updates on tokens, and cleans up at sh
   const fire = async (name: string, event = {}) => handlers.get(name)?.(event, ctx);
   cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
-  expect(statuses[0]).toContain("OAI -/- | AGY -/-");
-  await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | AGY 84%/67%"));
+  expect(statuses[0]).toContain("OAI -/- | CLA -/- | AGY -/-");
+  await vi.waitFor(() => expect(statuses.at(-1)).toContain("OAI 73%/61% | CLA -/- | AGY 84%/67%"));
   await fire("message_end", { message: {
     role: "assistant", provider: "openai-codex", model: "gpt", timestamp: Date.now(), stopReason: "stop",
     usage: { input: 100, output: 20, reasoning: 10, cacheRead: 5, cacheWrite: 3, totalTokens: 128 },
@@ -206,11 +208,11 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const { queryCodexQuota } = await import("../src/providers/codex.js");
   const callsBeforeRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
   const saved = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
-    body: JSON.stringify({ showOaiInStatusbar: false, showAgyInStatusbar: false }) });
+    body: JSON.stringify({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false }) });
   expect(saved.status).toBe(200);
   expect(statuses.at(-1)).toEqual({ key: "pi-quota-monitor", text: "↑0 ↓0" });
   const refreshedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
-  expect(refreshedState.config).toMatchObject({ showOaiInStatusbar: false, showAgyInStatusbar: false });
+  expect(refreshedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false });
   const refreshResponse = await fetch(`${url}/api/refresh`, { method: "POST", headers });
   expect(refreshResponse.status).toBe(200);
   expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
@@ -228,15 +230,15 @@ it("keeps selected RPC status visible in the console and applies settings withou
 
   const tuiContext = { ...ctx, mode: "tui" } as unknown as ExtensionContext;
   await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, tuiContext);
-  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | AGY 84%/67%");
+  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | CLA -/- | AGY 84%/67%");
 
   vi.mocked(saveConfig).mockRejectedValueOnce(new Error("disk full"));
   const failedSave = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
     body: JSON.stringify({ showOaiInStatusbar: true }) });
   expect(failedSave.status).toBe(500);
   const failedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
-  expect(failedState.config).toMatchObject({ showOaiInStatusbar: false, showAgyInStatusbar: false });
-  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | AGY 84%/67%");
+  expect(failedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false });
+  expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | CLA -/- | AGY 84%/67%");
   await fire("session_shutdown");
   cleanup.pop();
   await vi.waitFor(async () => { await expect(fetch(`${url}/api/state`)).rejects.toThrow(); });
@@ -330,7 +332,7 @@ it("shows saved account-specific readings before remote queries finish and persi
   } as unknown as ExtensionAPI);
   cleanup.push(() => handlers.get("session_shutdown")?.({ reason: "quit" }, ctx));
   await handlers.get("session_start")?.({}, ctx);
-  expect(statuses[0]).toContain("OAI 42%/- | AGY 55%/-");
+  expect(statuses[0]).toContain("OAI 42%/- | CLA -/- | AGY 55%/-");
   await commands.get("quota-console")?.("", ctx);
   const url = notify.mock.calls.at(-1)![0].match(/http:\/\/127\.0\.0\.1:\d+/)![0];
   const cached = await (await fetch(`${url}/api/state`)).json();
@@ -346,6 +348,27 @@ it("shows saved account-specific readings before remote queries finish and persi
   const switched = await (await fetch(`${url}/api/state`)).json();
   expect(switched.currentAccountId).toBe("account:other-account");
   expect(switched.codex.value?.fiveHour.remainingPercent).not.toBe(40);
+});
+
+it("replaces a resident server with stale assets on extension reload", async () => {
+  const actions = { state: () => dashboardFixture(), refresh: async () => {}, setInterval: async () => {},
+    setPort: async () => {}, setStatusbar: async () => {} };
+  const firstOwner = {}, nextOwner = {};
+  const first = await attachDashboard(firstOwner, actions, 0);
+  await first.start();
+  try {
+    await detachDashboard(firstOwner, false);
+    // Simulate a server constructed by an older loaded copy of the extension.
+    const key = Symbol.for("pi-quota-monitor.resident-dashboard.v1");
+    const registry = (globalThis as unknown as Record<symbol, Map<string, object>>)[key];
+    const resident = registry.get(stored.root)!;
+    Reflect.set(resident, "assetsVersion", 1);
+    const replacement = await attachDashboard(nextOwner, actions, 0);
+    expect(replacement).not.toBe(first);
+    const html = await (await fetch(await replacement.start())).text();
+    expect(html).toContain('id="claude-title"');
+    await expect(first.start()).rejects.toThrow("closed");
+  } finally { await detachDashboard(nextOwner, true); }
 });
 
 it("ignores a provider result that arrives after shutdown", async () => {

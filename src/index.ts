@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readStoredCredential, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "./accounts.js";
 import { backupHistory, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
@@ -8,6 +9,7 @@ import { QuotaReadings } from "./quota-readings.js";
 import { CodexPeriodStore } from "./codex-periods.js";
 import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
+import { queryClaudeQuota } from "./providers/claude.js";
 import { RefreshScheduler } from "./scheduler.js";
 import { formatDetails, formatStatus } from "./statusline.js";
 import { UsageAggregator } from "./tokens/aggregate.js";
@@ -15,14 +17,23 @@ import { accumulate, emptyTotals, tokenRecord } from "./tokens/collector.js";
 import { quotaAmountEstimates } from "./quota-estimate.js";
 import { appendUsage, localDate, readDailyUsage } from "./tokens/store.js";
 import { subagentUsage } from "./tokens/subagents.js";
-import type { AntigravityQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, MonitorConfig, ProviderCache, TokenTotals } from "./types.js";
 
 const STATUS_KEY = "pi-quota-monitor";
-type ProviderId = "openai-codex" | "antigravity";
+type ProviderId = "openai-codex" | "anthropic" | "antigravity";
+
+function claudeAccess(): string | undefined {
+  const stored = readStoredCredential("anthropic");
+  return stored?.type === "oauth" && typeof stored.access === "string" && stored.access ? stored.access : undefined;
+}
+function claudeRevision(): string | undefined {
+  const access = claudeAccess();
+  return access ? createHash("sha256").update(access).digest("hex") : undefined;
+}
 
 function safeFailure(error: unknown): string {
   // Never display provider response bodies, authorization headers, or error messages containing secrets.
-  if (error instanceof Error && error.message === "Codex credential belongs to a custom endpoint.") return error.message;
+  if (error instanceof Error && ["Codex credential belongs to a custom endpoint.", "Claude credential belongs to a custom endpoint."].includes(error.message)) return error.message;
   if (error instanceof Error && /credentials unavailable|credential unavailable|Invalid Antigravity provider credential/i.test(error.message)) return "Not logged in";
   if (error instanceof Error && error.message === "agy binary unavailable.") return "agy executable unavailable";
   if (error instanceof Error && error.message === "agy usage timed out.") return "agy native query timed out";
@@ -74,6 +85,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   const dashboardOwner = {};
   let codexHistory: CodexQuota[] = [];
   let agyHistory: AntigravityQuota[] = [];
+  let claudeHistory: ClaudeQuota[] = [];
   const agyReadings = new QuotaReadings("antigravity");
   let readingsQueue: Promise<void> = Promise.resolve();
   let codexRestore: Promise<void> = Promise.resolve();
@@ -95,9 +107,13 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   let childUsageIncomplete = false;
   const reconcileChildren = () => { void childUsage?.reconcile(); }; // No reliable account binding for detached children.
   let requestAccountId: string | undefined;
+  let requestClaudeAccountId: string | undefined;
+  let claudeAccountId: string | undefined;
+  let lastClaudeRevision: string | undefined;
   let codexAccountId: string | undefined;
   const codex: ProviderCache<CodexQuota> = {};
   const antigravity: ProviderCache<AntigravityQuota> = {};
+  const claude: ProviderCache<ClaudeQuota> = {};
   const inFlight: Partial<Record<ProviderId, Promise<void>>> = {};
 
   function live(epoch: number): boolean {
@@ -108,13 +124,27 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!active || !ctx.hasUI) return;
     // RPC setStatus is forwarded by pi-web; TUI uses its native status footer.
     try {
+      syncClaudeCredential();
       const visibility = ctx.mode === "rpc"
-        ? { showOai: config.showOaiInStatusbar, showAgy: config.showAgyInStatusbar }
-        : undefined; // TUI statusbars retain the historical OAI + AGY display.
-      ctx.ui.setStatus(STATUS_KEY, formatStatus(codex, antigravity, sessionTotals, config.showReset, Date.now(), visibility));
+        ? { showOai: config.showOaiInStatusbar, showAgy: config.showAgyInStatusbar, showClaude: config.showClaudeInStatusbar }
+        : undefined; // TUI retains all provider status segments.
+      ctx.ui.setStatus(STATUS_KEY, formatStatus(codex, antigravity, sessionTotals, config.showReset, Date.now(), visibility, claude));
     } catch {
       // A closing/replaced UI must not turn a completed quota query into an unhandled rejection.
     }
+  }
+
+  function syncClaudeCredential(): void {
+    const revision = claudeRevision();
+    if (revision === lastClaudeRevision) return;
+    lastClaudeRevision = revision;
+    claudeAccountId = undefined;
+    claudeHistory = [];
+    claude.value = undefined;
+    claude.error = undefined;
+    claude.restored = false;
+    claude.storageError = undefined;
+    claude.lastAttemptAt = undefined;
   }
 
   async function restoreCodex(account: string | undefined, epoch: number): Promise<void> {
@@ -145,6 +175,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
 
   function refresh(provider: ProviderId, ctx: ExtensionContext, force = false): Promise<void> {
     if (!active) return Promise.resolve();
+    if (provider === "anthropic") syncClaudeCredential();
+    const revision = provider === "anthropic" ? lastClaudeRevision : undefined;
     const account = provider === "openai-codex" ? activeAccountId() : undefined;
     if (provider === "openai-codex" && codexAccountId !== account) {
       codexAccountId = account;
@@ -160,7 +192,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       render(ctx);
     }
     if (inFlight[provider]) return inFlight[provider];
-    const cache = provider === "openai-codex" ? codex : antigravity;
+    const cache = provider === "openai-codex" ? codex : provider === "anthropic" ? claude : antigravity;
     if (!force && cache.lastAttemptAt !== undefined && Date.now() - cache.lastAttemptAt < config.staleAfterSeconds * 1000) return Promise.resolve();
     cache.lastAttemptAt = Date.now();
     const epoch = generation;
@@ -190,6 +222,26 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             try { await syncCodexPeriods(account, views.get(`account:${account}`)); }
             catch { if (live(epoch) && codexAccountId === account) codex.storageError = "周期估算记录保存失败；当前额度读数仍可用。"; }
           }
+        } else if (provider === "anthropic") {
+          if (!revision) throw new Error("Claude OAuth credential unavailable.");
+          const configured = ctx.modelRegistry.getProvider(provider);
+          if (!configured || new URL(configured.baseUrl ?? configured.getModels()[0]?.baseUrl ?? "").origin !== "https://api.anthropic.com")
+            throw new Error("Claude credential belongs to a custom endpoint.");
+          const resolved = await ctx.modelRegistry.getProviderAuth(provider);
+          const access = claudeAccess();
+          if (!live(epoch) || claudeRevision() !== revision) return;
+          // An environment API key or custom auth must never be sent to the subscription endpoint.
+          if (!access || !resolved || resolved.auth.apiKey !== access) throw new Error("Claude OAuth credential unavailable.");
+          const result = await queryClaudeQuota(access, signal, timeoutMs);
+          if (!live(epoch) || claudeRevision() !== revision) return;
+          claudeAccountId = result.accountId;
+          claude.value = result.quota;
+          claude.error = undefined;
+          claude.restored = false;
+          claudeHistory = result.accountId ? await new QuotaReadings("claude", result.accountId).load() : [];
+          if (!live(epoch) || claudeRevision() !== revision) return;
+          claudeHistory = [...claudeHistory.filter((q) => q.capturedAt < result.quota.capturedAt && q.capturedAt > Date.now() - 8 * 86_400_000), result.quota];
+          if (result.accountId) await persistReading(() => new QuotaReadings("claude", result.accountId).append(result.quota), claude, epoch);
         } else {
           const localAgy = ctx.modelRegistry.getProvider(provider)?.baseUrl?.startsWith("agy://") ?? false;
           // Local agy uses a sentinel API key, not an OAuth credential. Its own
@@ -210,7 +262,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           await persistReading(() => agyReadings.append(result), antigravity, epoch);
         }
       } catch (error) {
-        if (!live(epoch) || (provider === "openai-codex" && activeAccountId() !== account)) return;
+        if (!live(epoch) || (provider === "openai-codex" && activeAccountId() !== account)
+          || (provider === "anthropic" && claudeRevision() !== revision)) return;
         cache.error = safeFailure(error);
       } finally {
         if (live(epoch)) render(ctx);
@@ -221,7 +274,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       if (inFlight[provider] !== promise) return;
       delete inFlight[provider];
       // An account changed during an older query: never reuse its result or delay the new query until the next timer.
-      if (provider === "openai-codex" && live(epoch) && activeAccountId() !== account && currentContext) {
+      if (live(epoch) && currentContext && (provider === "openai-codex" && activeAccountId() !== account
+        || provider === "anthropic" && claudeRevision() !== revision)) {
         void refresh(provider, currentContext, true);
       }
     }).catch(() => {});
@@ -229,7 +283,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   }
 
   async function refreshAll(ctx: ExtensionContext, force = false): Promise<void> {
-    await Promise.all([refresh("openai-codex", ctx, force), refresh("antigravity", ctx, force)]);
+    await Promise.all([refresh("openai-codex", ctx, force), refresh("anthropic", ctx, force), refresh("antigravity", ctx, force)]);
   }
 
   async function setIntervalSeconds(seconds: number, epoch: number): Promise<void> {
@@ -250,7 +304,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     config = next; // The running dashboard keeps its existing socket until the next launch.
   }
 
-  async function setStatusbarSettings(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar">>, epoch: number): Promise<void> {
+  async function setStatusbarSettings(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showAgyInStatusbar" | "showClaudeInStatusbar">>, epoch: number): Promise<void> {
     if (!live(epoch)) throw new Error("Session is no longer active.");
     const next = { ...config, ...settings };
     await saveConfig(next);
@@ -305,15 +359,25 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!live(epoch)) return;
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
+    delete inFlight.anthropic;
+    lastClaudeRevision = undefined;
+    claudeAccountId = undefined;
+    claudeHistory = [];
+    claude.value = undefined;
+    claude.error = undefined;
+    claude.lastAttemptAt = undefined;
+    claude.storageError = undefined;
+    syncClaudeCredential();
     codexAccountId = activeAccountId();
     requestAccountId = undefined;
+    requestClaudeAccountId = undefined;
     codex.value = undefined;
     codex.error = undefined;
     codex.lastAttemptAt = undefined;
     antigravity.value = undefined;
     antigravity.error = undefined;
     antigravity.lastAttemptAt = undefined;
-    codex.restored = antigravity.restored = false;
+    codex.restored = antigravity.restored = claude.restored = false;
     codex.storageError = antigravity.storageError = undefined;
     await readingsQueue;
     codexRestore = restoreCodex(codexAccountId, epoch);
@@ -345,7 +409,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   pi.on("model_select", (_event, ctx) => {
     if (!active) return;
     render(ctx);
-    if (_event.model.provider === "openai-codex" || _event.model.provider === "antigravity") {
+    if (_event.model.provider === "openai-codex" || _event.model.provider === "anthropic" || _event.model.provider === "antigravity") {
       void refresh(_event.model.provider, ctx, true);
     }
   });
@@ -353,11 +417,16 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
   pi.on("after_provider_response", (event, ctx) => {
     if (event.status !== 429 || !active) return;
     const provider = ctx.model?.provider;
-    if (provider === "openai-codex" || provider === "antigravity") void refresh(provider, ctx, true);
+    if (provider === "openai-codex" || provider === "anthropic" || provider === "antigravity") void refresh(provider, ctx, true);
   });
 
   pi.on("before_provider_headers", (_event, ctx) => {
-    if (active && ctx.model?.provider === "openai-codex") requestAccountId = activeAccountId();
+    if (!active) return;
+    if (ctx.model?.provider === "openai-codex") requestAccountId = activeAccountId();
+    if (ctx.model?.provider === "anthropic") {
+      syncClaudeCredential();
+      requestClaudeAccountId = claudeAccountId;
+    }
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -368,7 +437,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       record.sessionId = ctx.sessionManager.getSessionFile?.() ?? ctx.sessionManager.getSessionId?.();
     }
     if (record?.provider === "openai-codex" && requestAccountId) record.accountId = requestAccountId;
+    if (record?.provider === "anthropic" && requestClaudeAccountId) record.accountId = requestClaudeAccountId;
     requestAccountId = undefined;
+    requestClaudeAccountId = undefined;
     if (record) {
       sessionTotals = accumulate(sessionTotals, record);
       ledgerQueue = ledgerQueue.then(async () => {
@@ -389,10 +460,10 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
       render(ctx);
     }
     if (event.message.stopReason === "error" && /429|quota|rate.limit|RESOURCE_EXHAUSTED/i.test(event.message.errorMessage ?? "")) {
-      if (event.message.provider === "openai-codex" || event.message.provider === "antigravity") {
+      if (event.message.provider === "openai-codex" || event.message.provider === "anthropic" || event.message.provider === "antigravity") {
         void refresh(event.message.provider, ctx, true);
       }
-    } else if (event.message.provider === "openai-codex" || event.message.provider === "antigravity") {
+    } else if (event.message.provider === "openai-codex" || event.message.provider === "anthropic" || event.message.provider === "antigravity") {
       void refresh(event.message.provider, ctx);
     }
   });
@@ -412,6 +483,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (command !== "console") await childUsage?.reconcile();
     // Native /login and external auth changes must invalidate the previous account's quota before display.
     void refresh("openai-codex", ctx);
+    void refresh("anthropic", ctx);
     if (command === "console") {
       try {
       if (!dashboard) {
@@ -463,7 +535,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             // A child ledger write may land after the last quota reading. Always
             // reconcile the incremental ledger cursor before estimating/displaying.
             await view.refresh();
-            const quotaEstimates = quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory);
+            syncClaudeCredential();
+            const quotaEstimates = quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory, claude, claudeHistory, claudeAccountId);
             let codexPeriods = [] as Awaited<ReturnType<CodexPeriodStore["load"]>>;
             try {
               codexPeriods = selected === "all" ? [] : showingCurrent && currentId && codexAccountId === currentId
@@ -477,7 +550,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             return { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId: selected,
               codexPeriods,
               currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
-              antigravity, usage: { ...view.state(), childUsageIncomplete }, context: currentContext ? contextMetrics(currentContext) : null,
+              claude, antigravity, usage: { ...view.state(), childUsageIncomplete }, context: currentContext ? contextMetrics(currentContext) : null,
               quotaEstimates, config, updatedAt: Date.now() };
           },
           accountCommand: async (command, args) => {
@@ -540,7 +613,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     }
     await updateDailyDate(epoch);
     if (!live(epoch)) return;
-    const details = formatDetails(codex, antigravity, sessionTotals, dailyTotals, config.refreshIntervalSeconds);
+    syncClaudeCredential();
+    const details = formatDetails(codex, antigravity, sessionTotals, dailyTotals, config.refreshIntervalSeconds, claude);
     if (ctx.hasUI) ctx.ui.notify(details, "info");
     else console.log(details);
   };
@@ -698,6 +772,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     views.clear();
     delete inFlight["openai-codex"];
     delete inFlight.antigravity;
+    delete inFlight.anthropic;
     currentContext = undefined;
     try { if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined); }
     catch { /* A closing UI must not prevent ledger flushing. */ }
