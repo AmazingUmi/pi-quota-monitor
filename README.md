@@ -14,7 +14,7 @@
 pi install npm:pi-quota-monitor
 ```
 
-安装后重启 Pi 或重新加载扩展。仓库开发可运行 `pi --extension ./src/index.ts`，或 `pi install .`。
+安装后重启 Pi 或重新加载扩展。仓库开发可运行 `pi --extension ./extensions/index.ts`，或 `pi install .`。`extensions/index.ts` 是包的唯一 Pi 入口；实现与控制台静态文件放在 `src/`，测试放在 `test/`，发布检查脚本放在 `scripts/`。`package.json` 的 `pi.extensions` 显式指向入口，npm 包须包含 `extensions/` 和 `src/`。
 
 ### 命令
 
@@ -50,13 +50,15 @@ pi install npm:pi-quota-monitor
 - **账号备份包含 OAuth token**：请保存在私有目录，勿分享或提交。重置本地用量不会重置服务商额度。
 - 配置位于 `~/.pi/agent/pi-quota-monitor/config.json`；`PI_CODING_AGENT_DIR` 可更改 Pi 数据目录。
 
-### 发布前检查
+### 发布与画廊收录
 
 ```bash
 npm ci
-npm run check
-npm pack --dry-run
+npm run check # 包含 npm 打包清单与静态资源检查
+npm view pi-quota-monitor@latest version keywords pi --json
 ```
+
+Pi 画廊以**已公开发布的 npm 版本**为准：`pi-package` 关键字使其有资格被检索，并不保证立即出现在搜索结果。可检查 [包详情页](https://pi.dev/packages/pi-quota-monitor) 与[名称筛选](https://pi.dev/packages?name=pi-quota-monitor)；若详情可访问、筛选却缺失，通常不是 `extensions/` 布局问题。仓库改动不会更新已发布版本；测试通过后需提升版本号并由有 npm 发布权限的维护者发布，随后再检查索引。请勿为了收录而重复发布相同版本或提交本地凭据。
 
 ## English
 
@@ -70,7 +72,7 @@ Requires Node.js 22+ and credentials for the providers you query. Local Antigrav
 pi install npm:pi-quota-monitor
 ```
 
-Restart Pi or reload extensions. For repository development, use `pi --extension ./src/index.ts` or `pi install .`.
+Restart Pi or reload extensions. For repository development, use `pi --extension ./extensions/index.ts` or `pi install .`. `extensions/index.ts` is the sole Pi entry point; implementation and dashboard assets live in `src/`, tests in `test/`, and packaging checks in `scripts/`. The explicit `pi.extensions` manifest points to the entry, and both `extensions/` and `src/` must be packed.
 
 ### Commands
 
@@ -107,10 +109,12 @@ Other account commands: `/quota-account-current`, `/quota-account-backup`, `/quo
 - **Account backups contain OAuth tokens**: keep them private. Resetting the local usage ledger does not reset provider quotas.
 - Configuration lives in `~/.pi/agent/pi-quota-monitor/config.json`; `PI_CODING_AGENT_DIR` changes the Pi data directory.
 
-### Pre-publish checks
+### Publishing and gallery discovery
 
 ```bash
 npm ci
-npm run check
-npm pack --dry-run
+npm run check # includes a packed-file and dashboard-asset check
+npm view pi-quota-monitor@latest version keywords pi --json
 ```
+
+The Pi gallery uses the **published public npm version**. The `pi-package` keyword makes it eligible for discovery but does not guarantee an immediate search result. Compare the [direct package page](https://pi.dev/packages/pi-quota-monitor) with the [name filter](https://pi.dev/packages?name=pi-quota-monitor); a working detail page with a missing search result is not fixed by changing the local directory layout. Repository changes do not update npm: after checks pass, a maintainer with npm publishing access must bump the version and publish, then recheck indexing. Do not republish the same version or commit local credentials.

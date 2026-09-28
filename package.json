@@ -32,6 +32,7 @@
     "access": "public"
   },
   "files": [
+    "extensions",
     "src",
     "README.md",
     "LICENSE"
@@ -39,7 +40,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node --check src/dashboard/client.js && npm test",
+    "check": "npm run typecheck && node --check src/dashboard/client.js && npm test && npm run check:package",
+    "check:package": "node scripts/check-package.mjs",
     "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
@@ -58,7 +60,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./extensions/index.ts"
     ]
   },
   "dependencies": {
