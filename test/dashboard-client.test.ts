@@ -10,18 +10,37 @@ const css = readFileSync(new URL("../src/dashboard/style.css", import.meta.url),
 const windows: JSDOM[] = [];
 afterEach(() => { for (const dom of windows.splice(0)) dom.window.close(); });
 
-async function mount(state = dashboardFixture()) {
+async function mount(state = dashboardFixture(), initiallyHidden = false) {
   const dom = new JSDOM(html, { url: "http://127.0.0.1:3000", runScripts: "outside-only", pretendToBeVisual: true });
   windows.push(dom);
+  let hidden = initiallyHidden;
+  Object.defineProperty(dom.window.document, "hidden", { configurable: true, get: () => hidden });
   const fetch = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(init?.method === "POST" ? { ok: true } : state)));
   dom.window.fetch = fetch;
   // The production poll is tested explicitly, without leaving real timers running.
-  dom.window.setInterval = vi.fn(() => 1);
+  let intervalId = 0;
+  dom.window.setInterval = vi.fn(() => ++intervalId);
+  dom.window.clearInterval = vi.fn();
   new Script(script).runInContext(dom.getInternalVMContext());
   await vi.waitFor(() => expect(dom.window.document.getElementById("connection-status")?.dataset.state).toBe("connected"));
   const get = <T extends HTMLElement = HTMLElement>(id: string) => dom.window.document.getElementById(id) as T;
-  return { dom, get, state, fetch, reload: () => dom.window.eval("load()") as Promise<void> };
+  const setHidden = (value: boolean) => {
+    hidden = value;
+    dom.window.document.dispatchEvent(new dom.window.Event("visibilitychange"));
+  };
+  return { dom, get, state, fetch, setHidden, reload: () => dom.window.eval("load()") as Promise<boolean> };
 }
+
+it("formats finite numeric money as before and rejects non-numeric or non-finite values", async () => {
+  const { dom } = await mount();
+  for (const expression of ["undefined", "null", "'1.2'", "NaN", "Infinity", "-Infinity", "{ toFixed() { throw Error('invalid'); } }"]) {
+    expect(dom.window.eval(`money(${expression})`)).toBe("—");
+  }
+  expect(dom.window.eval("money(12.6)")).toBe("$12.60");
+  expect(dom.window.eval("money(0.005)")).toBe("$0.0050");
+  expect(dom.window.eval("money(0.00001)")).toBe("$0.000010");
+  expect(dom.window.eval("money(-1)")).toBe("$-1.0000");
+});
 
 it("shows three desktop quota cards with their own statusbar switches", async () => {
   const { get } = await mount();
@@ -103,6 +122,23 @@ it("keeps both OAI amount labels visible while estimates are unavailable", async
   state.quotaEstimates.codex.weekly = dashboardFixture().quotaEstimates.codex.weekly;
   await reload();
   expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
+});
+
+it("tolerates missing or partial quota estimates without losing quota readings", async () => {
+  const { get, state, fetch, reload } = await mount();
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...state, quotaEstimates: undefined })));
+  await reload();
+  expect(get("connection-status").dataset.state).toBe("connected");
+  expect(get("feedback").textContent).toBe("");
+  expect(get("codex-windows").querySelector("meter")?.value).toBe(61);
+  expect(get("agy-windows").querySelector("meter")?.value).toBe(83);
+  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...state, quotaEstimates: { codex: {}, antigravity: {} } })));
+  await reload();
+  expect(get("connection-status").dataset.state).toBe("connected");
+  expect(get("agy-windows").querySelector("meter")?.value).toBe(83);
+  await reload();
+  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("$46.67");
 });
 
 it("preserves open amount details and focus across unchanged and changed cache polls", async () => {
@@ -221,15 +257,117 @@ it("keeps refresh/settings actions authenticated and restores controls after fai
   await vi.waitFor(() => expect(get<HTMLInputElement>("show-claude").disabled).toBe(false));
 });
 
-it("reports a disconnected session and recovers on the next successful read", async () => {
-  const { get, dom, fetch, reload } = await mount();
+it("reports failed fetches and HTTP errors as disconnected, then recovers on a successful read", async () => {
+  const { get, fetch, reload } = await mount();
   fetch.mockRejectedValueOnce(new Error("本地会话已结束"));
-  await dom.window.eval("load().catch(loadError)");
+  await reload();
   expect(get("connection-status").dataset.state).toBe("offline");
+  expect(get("connection-status").textContent).toBe("连接已断开");
   expect(get("feedback").textContent).toBe("本地会话已结束");
+  fetch.mockResolvedValueOnce(new Response("{}", { status: 503 }));
+  await reload();
+  expect(get("connection-status").dataset.state).toBe("offline");
+  expect(get("feedback").textContent).toContain("本地会话已结束，请在 Pi 中重新运行");
   await reload();
   expect(get("connection-status").dataset.state).toBe("connected");
   expect(get("feedback").textContent).toBe("");
+});
+
+it("reports render exceptions without disconnecting or overwriting the error, then recovers", async () => {
+  const { dom, get, reload } = await mount();
+  dom.window.eval("window.originalDashboardRender = render; render = () => { throw new Error('测试渲染异常'); }");
+  await reload();
+  expect(get("connection-status").dataset.state).toBe("connected");
+  expect(get("connection-status").textContent).toBe("本地已连接");
+  expect(get("feedback").textContent).toBe("页面渲染出错：测试渲染异常");
+  get("refresh").click();
+  await vi.waitFor(() => expect(get<HTMLButtonElement>("refresh").disabled).toBe(false));
+  expect(get("feedback").textContent).toBe("页面渲染出错：测试渲染异常");
+  dom.window.eval("render = window.originalDashboardRender");
+  await reload();
+  expect(get("connection-status").dataset.state).toBe("connected");
+  expect(get("feedback").textContent).toBe("");
+});
+
+it("ignores out-of-order reads for the same account, including stale failures", async () => {
+  const { dom, get, state, fetch, reload } = await mount();
+  const pending: Array<{ resolve: (response: Response) => void; reject: (error: Error) => void }> = [];
+  fetch.mockImplementation(() => new Promise<Response>((resolve, reject) => pending.push({ resolve, reject })));
+  const oldState = { ...state, control: "old-control", updatedAt: 1 };
+  const newState = { ...state, control: "new-control", updatedAt: 2,
+    usage: { ...state.usage, totals: { ...state.usage.totals, totalTokens: 1234 } } };
+  const oldRead = reload();
+  const newRead = reload();
+  expect(pending).toHaveLength(2);
+  pending[1].resolve(new Response(JSON.stringify(newState)));
+  await newRead;
+  expect(get("overview-tokens").textContent).toBe("1,234");
+  expect(dom.window.eval("control")).toBe("new-control");
+  pending[0].resolve(new Response(JSON.stringify(oldState)));
+  await oldRead;
+  expect(get("overview-tokens").textContent).toBe("1,234");
+  expect(dom.window.eval("latest.updatedAt")).toBe(2);
+  expect(dom.window.eval("control")).toBe("new-control");
+  const staleFailure = reload();
+  const goodRead = reload();
+  pending[3].resolve(new Response(JSON.stringify(newState)));
+  await goodRead;
+  pending[2].reject(new Error("old request failed"));
+  await staleFailure;
+  expect(get("connection-status").dataset.state).toBe("connected");
+  expect(get("feedback").textContent).toBe("");
+});
+
+it("does not let polling overwrite the load triggered by a completed action", async () => {
+  const { dom, get, state, fetch, reload } = await mount();
+  let finishPoll: (response: Response) => void = () => { throw new Error("poll did not start"); };
+  const updated = { ...state, control: "action-control", usage: { ...state.usage,
+    totals: { ...state.usage.totals, totalTokens: 4321 } } };
+  let firstRead = true;
+  fetch.mockImplementation((_url, init) => {
+    if (init?.method === "POST") return Promise.resolve(new Response(JSON.stringify({ ok: true })));
+    if (firstRead) {
+      firstRead = false;
+      return new Promise<Response>((resolve) => { finishPoll = resolve; });
+    }
+    return Promise.resolve(new Response(JSON.stringify(updated)));
+  });
+  const polling = reload();
+  get("refresh").click();
+  await vi.waitFor(() => expect(get("feedback").textContent).toBe("已更新"));
+  finishPoll(new Response(JSON.stringify({ ...state, control: "poll-control" })));
+  await polling;
+  expect(get("overview-tokens").textContent).toBe("4,321");
+  expect(dom.window.eval("control")).toBe("action-control");
+});
+
+it("stops browser polling and countdown while hidden and resumes exactly one pair when visible", async () => {
+  const { dom, fetch, setHidden } = await mount();
+  const start = vi.mocked(dom.window.setInterval);
+  const stop = vi.mocked(dom.window.clearInterval);
+  expect(start.mock.calls.map(([, delay]) => delay)).toEqual([5000, 1000]);
+  setHidden(true);
+  expect(stop.mock.calls.map(([id]) => id)).toEqual([1, 2]);
+  setHidden(false);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  expect(start.mock.calls.map(([, delay]) => delay)).toEqual([5000, 1000, 5000, 1000]);
+  setHidden(false);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(start).toHaveBeenCalledTimes(4);
+  setHidden(true);
+  expect(stop.mock.calls.map(([id]) => id)).toEqual([1, 2, 3, 4]);
+  setHidden(false);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+  expect(start).toHaveBeenCalledTimes(6);
+});
+
+it("performs the initial load but starts no timers if the page begins hidden", async () => {
+  const { dom, fetch, setHidden } = await mount(dashboardFixture(), true);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(dom.window.setInterval).not.toHaveBeenCalled();
+  setHidden(false);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  expect(dom.window.setInterval).toHaveBeenCalledTimes(2);
 });
 
 it("shows help on hover/focus and supports click, outside dismissal, and Escape", async () => {

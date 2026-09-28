@@ -7,8 +7,12 @@ let busy = false;
 let selectedAccount;
 let lastAccountNoticeAt = 0;
 let portDirty = false;
+let requestSequence = 0;
+let pollTimer;
+let countdownTimer;
 
 function money(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   return `$${value > 0 && value < 0.0001 ? value.toPrecision(2) : value >= 0.01 ? value.toFixed(2) : value.toFixed(4)}`;
 }
 function percent(value) {
@@ -208,9 +212,9 @@ function renderCodex(cache) {
     ? `${selected} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
     : `${selected} · 无法查询 Codex 实时额度及当期金额估算（仅当前登录账号可查询）`;
   const windows = $("codex-windows");
-  updateQuotaContent(windows, [result, latest.quotaEstimates.codex], latest.selectedAccountId ?? "all", () => {
-    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, viewingCurrent ? latest.quotaEstimates.codex.weekly : undefined, false, viewingCurrent);
-    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, viewingCurrent ? latest.quotaEstimates.codex.fiveHour : undefined,
+  updateQuotaContent(windows, [result, latest.quotaEstimates?.codex], latest.selectedAccountId ?? "all", () => {
+    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, viewingCurrent ? latest.quotaEstimates?.codex?.weekly : undefined, false, viewingCurrent);
+    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, viewingCurrent ? latest.quotaEstimates?.codex?.fiveHour : undefined,
       result?.plan?.toLowerCase() === "pro" && !result.fiveHour, viewingCurrent);
   });
   $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
@@ -237,12 +241,12 @@ function renderAntigravity(cache) {
   const result = cache.value;
   $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 所有账本视图共享`;
   const container = $("agy-windows");
-  updateQuotaContent(container, [result, latest.quotaEstimates.antigravity], "antigravity", () => {
+  updateQuotaContent(container, [result, latest.quotaEstimates?.antigravity], "antigravity", () => {
     const groups = result?.groups ?? [];
     const models = result?.models ?? [];
     if (groups.length) {
       for (const [groupIndex, group] of groups.entries()) {
-        const windows = orderedWindows(group.windows ?? [], latest.quotaEstimates.antigravity.groups[groupIndex]?.windows);
+        const windows = orderedWindows(group.windows ?? [], latest.quotaEstimates?.antigravity?.groups?.[groupIndex]?.windows);
         // Additional groups remain scannable, with full windows available on demand.
         const collapsible = groupIndex > 0;
         const section = document.createElement(collapsible ? "details" : "section");
@@ -689,12 +693,28 @@ async function portAction(save) {
     feedback.textContent = error.message || "端口操作失败";
   } finally { setBusy(false); }
 }
+function safeRender() {
+  try {
+    render();
+    return true;
+  } catch (error) {
+    $("feedback").textContent = `页面渲染出错：${error.message}`;
+    return false;
+  }
+}
 async function load() {
+  const requestId = ++requestSequence;
   const requested = selectedAccount;
-  const response = await fetch(`/api/state${requested ? `?account=${encodeURIComponent(requested)}` : ""}`, { cache: "no-store" });
-  if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota-console");
-  const state = await response.json();
-  if (selectedAccount !== requested) return;
+  let state;
+  try {
+    const response = await fetch(`/api/state${requested ? `?account=${encodeURIComponent(requested)}` : ""}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("本地会话已结束，请在 Pi 中重新运行 /quota-console");
+    state = await response.json();
+  } catch (error) {
+    if (requestId === requestSequence && selectedAccount === requested) loadError(error);
+    return false;
+  }
+  if (requestId !== requestSequence || selectedAccount !== requested) return false;
   // A switch leaves the old profile in the account list. Do not keep viewing its
   // historical ledger when this tab was following the previously active account.
   if (latest?.currentAccountId && requested === latest.currentAccountId
@@ -705,10 +725,11 @@ async function load() {
   control = state.control;
   latest = state;
   selectedAccount = state.selectedAccountId;
-  render();
   $("connection-status").dataset.state = "connected";
   $("connection-status").textContent = "本地已连接";
+  if (!safeRender()) return false;
   if (!busy) $("feedback").textContent = "";
+  return true;
 }
 function loadError(error) {
   $("connection-status").dataset.state = "offline";
@@ -744,8 +765,8 @@ async function action(path, body) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
-    await load();
-    $("feedback").textContent = "已更新";
+    if (await load()) $("feedback").textContent = "已更新";
+    else syncStatusbarControls();
   } catch (error) {
     syncStatusbarControls();
     $("feedback").textContent = error.message || "操作失败";
@@ -879,7 +900,7 @@ $("account-restore-path").addEventListener("click", () => {
 $("refresh").addEventListener("click", () => { void action("/api/refresh"); });
 $("usage-account").addEventListener("change", (event) => {
   selectedAccount = event.currentTarget.value;
-  void load().catch(loadError);
+  void load();
 });
 $("quota-view").addEventListener("change", (event) => {
   const view = event.currentTarget.value;
@@ -922,6 +943,23 @@ if (typeof ResizeObserver !== "undefined") {
     if (latest) renderCodexPeriodChart();
   }).observe($("codex-period-chart"));
 }
-void load().catch(loadError);
-setInterval(() => { if (!busy) void load().catch(loadError); }, 5000);
-setInterval(renderCountdown, 1000);
+function startTimers() {
+  if (document.hidden) return;
+  if (pollTimer === undefined) pollTimer = setInterval(() => { if (!busy) void load(); }, 5000);
+  if (countdownTimer === undefined) countdownTimer = setInterval(renderCountdown, 1000);
+}
+function stopTimers() {
+  if (pollTimer !== undefined) clearInterval(pollTimer);
+  if (countdownTimer !== undefined) clearInterval(countdownTimer);
+  pollTimer = undefined;
+  countdownTimer = undefined;
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopTimers();
+  else if (pollTimer === undefined) {
+    void load();
+    startTimers();
+  }
+});
+void load();
+startTimers();

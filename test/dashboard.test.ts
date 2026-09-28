@@ -56,9 +56,9 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("关于数据");
   expect(html).toContain("状态与设置");
   expect(html).toContain("两次已保存读数之间的 Token 时间戳匹配账本金额");
-  expect(html).toContain("在 pi-web 扩展状态栏显示 OAI");
-  expect(html).toContain("在 pi-web 扩展状态栏显示 AGY");
-  expect(html).toContain("在 pi-web 扩展状态栏显示 CLA");
+  expect(html).toContain("在 pi-web 状态栏显示 OAI");
+  expect(html).toContain("在 pi-web 状态栏显示 AGY");
+  expect(html).toContain("在 pi-web 状态栏显示 CLA");
   expect(html).toContain('id="claude-windows"');
   for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
     "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
