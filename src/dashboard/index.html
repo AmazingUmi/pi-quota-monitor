@@ -8,128 +8,129 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/style.css">
   <script src="/client.js" defer></script>
+  <script src="/enhance.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳至主要内容</a>
   <header class="app-header">
     <div class="header-inner">
-      <a class="brand" href="#main" aria-label="Pi Quota 首页"><span class="brand-mark" aria-hidden="true">π</span><span>Pi Quota<span class="brand-caption">本地用量监控</span></span></a>
+      <a class="brand" href="#main" aria-label="Pi Quota 首页"><span class="brand-mark" aria-hidden="true">π</span><span>Pi Quota</span></a>
       <nav class="main-nav" aria-label="页面导航">
-        <a href="#overview-title">概览</a><a href="#quota-title">额度</a><a href="#usage-title">用量</a><a href="#settings">设置</a>
+        <a href="#quota-title">额度</a><a href="#overview-title">趋势</a><a href="#usage-title">用量</a><a href="#settings">设置</a>
       </nav>
-      <span id="connection-status" class="connection-status" data-state="loading" role="status">连接中</span>
+      <details class="account-menu" id="account-menu"><summary aria-label="账户选择：总量"><svg class="account-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><strong id="account-selection">总量</strong><span class="account-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="account-pop">
+        <div class="account-ledger"><label for="usage-account">查看账本</label><select id="usage-account"><option value="all">总体用量</option></select></div>
+        <div class="current-account"><span class="account-avatar" aria-hidden="true">P</span><span><span class="field-label">当前登录</span><strong id="account-current">读取中…</strong></span></div>
+        <div class="account-actions" role="group" aria-label="账号管理与历史">
+          <button id="account-use" type="button">切换账号</button><button id="account-add" type="button">新增账号</button><button id="account-manage" type="button">管理账号</button><button id="account-history" type="button">历史记录</button>
+        </div>
+        </div></details>
+      <button id="refresh" class="button-primary" type="button"><span aria-hidden="true">↻</span> 刷新额度</button>
+      <span id="connection-status" class="connection-status" data-state="loading" role="status" aria-label="连接中" title="连接中"></span>
     </div>
   </header>
 
   <main id="main" class="shell" tabindex="-1">
     <header class="hero">
-      <div><p class="eyebrow">WORKSPACE / QUOTA MONITOR</p><h1>用量控制台</h1><p class="subtitle">额度、消耗与模型表现，一目了然。</p></div>
-      <div class="hero-note"><span class="local-mark" aria-hidden="true">↻</span><span>本地缓存每 5 秒同步<small>仅本机可见 · 不额外请求 Provider</small></span></div>
+      <div><h1>用量控制台</h1></div>
     </header>
     <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
     <aside id="port-fallback" class="notice port-notice" role="status" hidden><span id="port-fallback-message"></span><button id="port-open-settings" type="button">设置端口</button></aside>
 
-    <section class="section control-section" aria-labelledby="control-title">
-      <h2 id="control-title" class="sr-only">控制管理</h2>
-      <div class="account-toolbar panel">
-        <div class="ledger-picker"><label for="usage-account">账本视图</label><select id="usage-account"><option value="all">总体用量</option></select></div>
-        <div class="current-account"><span class="account-avatar" aria-hidden="true">P</span><span><span class="field-label">当前登录</span><strong id="account-current">读取中…</strong></span></div>
-        <div class="account-actions" role="group" aria-label="账号管理与历史">
-          <button id="account-use" type="button">切换账号</button><button id="account-add" type="button">新增账号</button><button id="account-manage" type="button">管理账号</button><button id="account-history" type="button">历史记录</button>
-        </div>
-      </div>
-      <p id="account-feedback" class="account-feedback hint" role="status" aria-live="polite"></p>
-    </section>
-
-    <section class="section overview-section" aria-labelledby="overview-title">
-      <div class="section-heading"><div><p class="eyebrow">OVERVIEW</p><div class="title-row"><h2 id="overview-title">账本概览</h2>
-        <div class="help-tip"><button class="help-button" type="button" aria-label="关于数据" aria-describedby="data-help" aria-controls="data-help" aria-expanded="false">?</button>
-          <div id="data-help" class="help-tooltip" role="tooltip" hidden><strong>关于数据</strong><p>仅统计插件启用后的记录 · 费用非订阅实付</p>
-            <p>账本不覆盖插件启用前的历史。Reasoning 是 Output 的子集，不会重复计入 Total tokens。当前上下文对应正在运行的 Pi 会话，不随账本视图切换。</p>
-            <p>费用按账本 Token 和公开 API 标价估算，不是 Codex / Claude / Antigravity 订阅实付或账户预算上限；未知价格、缓存存储时长、非文本用量、工具调用、订阅折扣和历史价格变化可能导致估算不完整。</p>
-            <p>控制台在 Pi 进程内常驻，不随对话切换关闭；只绑定本机 127.0.0.1，不展示凭据或原始账本。页面只读取本地缓存，不因页面轮询而额外查询 Provider。</p>
-          </div>
-        </div>
-      </div></div><span class="section-note">累计记录 · 随账本视图切换</span></div>
-      <div class="overview">
-        <article class="metric-card"><div class="metric-label"><span>累计 Tokens</span><span class="metric-symbol" aria-hidden="true">↗</span></div><strong id="overview-tokens">—</strong><small id="overview-tokens-detail">正在读取本地账本…</small></article>
-        <article class="metric-card"><div class="metric-label"><span>估算费用 <span class="unit">USD</span></span><span class="metric-symbol" aria-hidden="true">$</span></div><strong id="overview-cost">—</strong><small id="overview-cost-detail">等待价格匹配</small></article>
-        <article class="metric-card context-card"><div class="metric-label"><span>当前上下文占用</span><span class="metric-symbol" aria-hidden="true">◫</span></div><strong id="overview-context">—</strong><meter id="context-meter" class="quota-meter" min="0" max="100" value="0" aria-label="当前上下文占用百分比" hidden></meter><small id="overview-context-detail">等待数据</small></article>
-      </div>
-    </section>
+    <p id="account-feedback" class="account-feedback hint" role="status" aria-live="polite"></p>
 
     <section class="section quota-section" aria-labelledby="quota-title">
-      <div class="section-heading"><div><p class="eyebrow">LIVE QUOTA</p><div class="title-row"><h2 id="quota-title">剩余额度</h2>
+      <div class="section-heading"><div><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
             <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。</p>
+            <p>开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
             <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算当期总金额与剩余金额；不会直接除以本周期全部已用额度。OAI 额度增加或重置时间明显变化时开始新一期，不假定每期固定为 5 小时或 7 天；起点只是首次观察时间。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
-      </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view"><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select><button id="refresh" class="button-primary" type="button"><span aria-hidden="true">↻</span> 刷新额度</button></div></div>
+      </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view" hidden><option value="ring" selected>圆环视图</option><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select></div></div>
       <p id="quota-pie-legend" class="pie-legend" hidden><span><i class="remaining-key" aria-hidden="true"></i>剩余</span><span><i class="used-key" aria-hidden="true"></i>已用</span><span>未知 / 不适用不绘制占比</span></p>
-      <div id="provider-grid" class="provider-grid" data-quota-view="bar">
+      <div id="provider-grid" class="provider-grid" data-quota-view="ring">
         <article class="provider-card panel" aria-labelledby="codex-title">
-          <header class="provider-heading"><span class="provider-icon codex-icon" aria-hidden="true">O</span><div><h3 id="codex-title">OpenAI Codex</h3><p id="codex-plan" class="hint">等待额度数据</p></div><span class="provider-tag">当前账号</span></header>
-          <div class="quota-groups"><section class="quota-group"><h4>订阅额度</h4><div id="codex-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
-          <p id="codex-success" class="provider-meta">等待查询</p>
-          <div id="codex-error" aria-live="polite"></div>
-          <label class="provider-status-toggle toggle"><input id="show-oai" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 OAI</span></label>
+          <header class="provider-heading"><span class="provider-icon codex-icon" aria-hidden="true">O</span><h3 id="codex-title">OpenAI Codex</h3><details class="info-help provider-help"><summary aria-label="OpenAI Codex 额度说明">?</summary><div class="help-content"><strong>OpenAI Codex</strong><p id="codex-plan">等待额度数据</p><p id="codex-success">等待查询</p><div id="codex-error" aria-live="polite"></div></div></details></header>
+          <div class="quota-groups"><section class="quota-group"><div id="codex-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
+          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-oai" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 OAI</span></label></div>
         </article>
         <article class="provider-card panel" aria-labelledby="claude-title">
-          <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><div><h3 id="claude-title">Claude</h3><p id="claude-plan" class="hint">等待额度数据</p></div><span class="provider-tag">当前 OAuth 账号</span></header>
-          <div class="quota-groups"><section class="quota-group"><h4>订阅额度</h4><div id="claude-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
-          <p id="claude-success" class="provider-meta">等待查询</p>
-          <div id="claude-error" aria-live="polite"></div>
-          <label class="provider-status-toggle toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 CLA</span></label>
+          <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><h3 id="claude-title">Claude</h3><details class="info-help provider-help"><summary aria-label="Claude 额度说明">?</summary><div class="help-content"><strong>Claude</strong><p id="claude-plan">等待额度数据</p><p id="claude-success">等待查询</p><div id="claude-error" aria-live="polite"></div></div></details></header>
+          <div class="quota-groups"><section class="quota-group"><div id="claude-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
+          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 CLA</span></label></div>
         </article>
         <article class="provider-card panel" aria-labelledby="agy-title">
-          <header class="provider-heading"><span class="provider-icon agy-icon" aria-hidden="true">A</span><div><h3 id="agy-title">Antigravity</h3><p id="agy-plan" class="hint">等待额度数据</p></div><span class="provider-tag">共享额度</span></header>
+          <header class="provider-heading"><span class="provider-icon agy-icon" aria-hidden="true">A</span><h3 id="agy-title">Antigravity</h3><details class="info-help provider-help"><summary aria-label="Antigravity 额度说明">?</summary><div class="help-content"><strong>Antigravity</strong><p id="agy-plan">等待额度数据</p><p id="agy-success">等待查询</p><div id="agy-error" aria-live="polite"></div></div></details></header>
           <div id="agy-windows" class="quota-groups"><p class="hint">正在读取额度…</p></div>
-          <p id="agy-success" class="provider-meta">等待查询</p>
-          <div id="agy-error" aria-live="polite"></div>
-          <label class="provider-status-toggle toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>在 pi-web 状态栏显示 AGY</span></label>
+          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 AGY</span></label></div>
         </article>
       </div>
-      <p class="quota-status-hint hint">开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
       <details id="codex-period-details" class="panel period-panel">
-        <summary><span class="period-toggle-title">OAI 当期总金额估算 · 逐期变化</span><span class="period-toggle-hint period-collapsed-hint">展开查看历史趋势</span><span class="period-toggle-hint period-expanded-hint">收起历史趋势</span></summary>
+        <summary><span class="period-toggle-title">OAI 当期总金额估算 · 逐期变化</span></summary>
         <div class="period-content">
-          <div class="chart-heading"><p class="hint">按所选 Codex 账号隔离；缺少有效估算的周期留空，不当作 $0。</p>
+          <div class="chart-heading"><details class="info-help"><summary aria-label="周期趋势说明">?</summary><div class="help-content"><strong>周期趋势说明</strong><p>按所选 Codex 账号隔离；缺少有效估算的周期留空，不当作 $0。</p><p>每点代表首次观察到的一期；空缺表示不可估算。实心点为已观察到下一期，空心点表示尚未观察到下一期。提前重置只能在下一次额度读数时发现。金额按本地 Token 与 API 标价外推，非实际订阅额度。</p><p id="codex-period-summary" aria-live="polite"></p></div></details>
             <div class="chart-controls"><div><label for="codex-period-kind">额度窗口</label><select id="codex-period-kind"><option value="weekly">Weekly</option><option value="fiveHour">5H</option></select></div></div>
           </div>
           <div id="codex-period-chart" class="chart period-chart" role="img" aria-label="OAI 逐期总金额估算">正在读取周期记录…</div>
-          <p id="codex-period-summary" class="hint" aria-live="polite"></p>
-          <p class="chart-footnote">每点代表首次观察到的一期；空缺表示不可估算。实心点为已观察到下一期，空心点表示尚未观察到下一期。提前重置只能在下一次额度读数时发现。金额按本地 Token 与 API 标价外推，非实际订阅额度。</p>
         </div>
       </details>
     </section>
 
-    <section class="section usage-section" aria-labelledby="usage-title">
-      <div class="section-heading"><div><p class="eyebrow">ANALYTICS</p><h2 id="usage-title">用量分析</h2></div><span class="section-note">Codex 按账号隔离 · Antigravity 共享</span></div>
+    <section class="section overview-section" aria-labelledby="overview-title">
+      <div class="section-heading"><div><div class="title-row"><h2 id="overview-title">账本概览</h2>
+        <div class="help-tip"><button class="help-button" type="button" aria-label="关于数据" aria-describedby="data-help" aria-controls="data-help" aria-expanded="false">?</button>
+          <div id="data-help" class="help-tooltip" role="tooltip" hidden><strong>关于数据</strong><p id="last-check">连接本地 Pi 会话中…</p><p>仅统计插件启用后的记录 · 费用非订阅实付</p>
+            <p>账本不覆盖插件启用前的历史。Reasoning 是 Output 的子集，不会重复计入 Total tokens。模型用量对比随当前账本视图切换。</p>
+            <p>费用按账本 Token 和公开 API 标价估算，不是 Codex / Claude / Antigravity 订阅实付或账户预算上限；未知价格、缓存存储时长、非文本用量、工具调用、订阅折扣和历史价格变化可能导致估算不完整。</p>
+            <p>控制台在 Pi 进程内常驻，不随对话切换关闭；只绑定本机 127.0.0.1，不展示凭据或原始账本。页面只读取本地缓存，不因页面轮询而额外查询 Provider。</p>
+          </div>
+        </div>
+      </div></div></div>
+      <div class="dash-row">
       <div class="panel usage-panel">
-        <div class="chart-heading"><div><h3>Token 与金额消耗趋势</h3><p class="hint">查看消耗节奏，按时间与模型筛选。</p></div>
+        <div class="stat-row">
+          <div class="stat"><div class="stat-label">累计 Tokens<details class="info-help"><summary aria-label="Token 统计说明">?</summary><div class="help-content"><strong>Token 统计说明</strong><p id="overview-tokens-detail">正在读取本地账本…</p></div></details></div><strong id="overview-tokens">—</strong></div>
+          <div class="stat"><div class="stat-label">估算费用 <span class="unit">USD</span><details class="info-help"><summary aria-label="费用估算说明">?</summary><div class="help-content"><strong>费用估算说明</strong><p id="overview-cost-detail">等待价格匹配</p></div></details></div><strong id="overview-cost">—</strong></div>
+        </div>
+        <div class="chart-heading"><div class="title-row"><h3>Token 与金额消耗趋势</h3><details class="info-help"><summary aria-label="消耗趋势说明">?</summary><div class="help-content"><strong>消耗趋势说明</strong><p>本插件账本 · 金额按公开 API 标价估算 · 小时刻度使用浏览器本地时区<span id="chart-view-note"></span></p><p id="chart-summary" aria-live="polite"></p><p id="cost-chart-summary" aria-live="polite"></p></div></details></div>
           <div class="chart-controls"><div><label for="chart-view">展示方式</label><select id="chart-view"><option value="interval">分时消耗</option><option value="cumulative">时段累计</option></select></div><div><label for="chart-period">时间范围</label><select id="chart-period"><option value="hours">最近 24 小时</option><option value="days">最近 30 天</option></select></div><div><label for="chart-model">模型</label><select id="chart-model"><option value="all">全部模型</option></select></div></div>
         </div>
         <div class="trend-grid">
-          <div class="trend-panel"><h4 class="trend-title"><span class="legend-dot" aria-hidden="true"></span><span id="token-trend-title">Token 消耗</span></h4><div id="chart" class="chart" role="img" aria-label="Token 消耗随时间变化图">正在读取本地账本…</div><p id="chart-summary" class="hint" aria-live="polite"></p></div>
-          <div class="trend-panel cost-trend"><h4 class="trend-title"><span class="legend-dot" aria-hidden="true"></span><span id="cost-trend-title">估算金额</span> <span class="unit">USD</span></h4><div id="cost-chart" class="chart" role="img" aria-label="估算金额消耗随时间变化图">正在读取本地账本…</div><p id="cost-chart-summary" class="hint" aria-live="polite"></p></div>
+          <div class="trend-panel"><h4 class="trend-title"><span class="legend-dot" aria-hidden="true"></span><span id="token-trend-title">Token 消耗</span></h4><div id="chart" class="chart" role="img" aria-label="Token 消耗随时间变化图">正在读取本地账本…</div></div>
+          <div class="trend-panel cost-trend"><h4 class="trend-title"><span class="legend-dot" aria-hidden="true"></span><span id="cost-trend-title">估算金额</span> <span class="unit">USD</span></h4><div id="cost-chart" class="chart" role="img" aria-label="估算金额消耗随时间变化图">正在读取本地账本…</div></div>
         </div>
-        <p class="chart-footnote">本插件账本 · 金额按公开 API 标价估算 · 小时刻度使用浏览器本地时区<span id="chart-view-note"></span></p>
+
       </div>
-      <div class="panel breakdown-panel"><div class="subsection-heading"><h3>Token 构成</h3><span class="section-note">累计用量 · Reasoning 已包含在 Output 中</span></div><div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div></div>
+        <aside class="panel side-panel" aria-label="模型用量对比">
+          <section class="model-comparison" aria-labelledby="model-comparison-title">
+            <div class="title-row"><h3 id="model-comparison-title">各模型用量对比</h3><details class="info-help"><summary aria-label="模型用量对比说明">?</summary><div class="help-content"><strong>模型用量对比说明</strong><p>随当前账本切换，按 Provider / Model 分组，按所选指标从高到低排列；条形长度按当前指标最大值归一化，最高用量显示满条，其余按比例显示，不受左侧趋势图的筛选影响。</p><p>24h 为当前小时及之前 23 个小时段；7day 为账本所在时区含今天在内的最近 7 个自然日，当前时段尚未结束。金额按 API 标价估算，未计价记录不作为零费用；* 表示金额尚不完整。</p><p id="model-comparison-note">正在读取本地账本…</p></div></details></div>
+            <div class="comparison-controls"><div><label class="sr-only" for="model-comparison-metric">模型对比指标</label><select id="model-comparison-metric"><option value="cost">金额</option><option value="tokens">Token</option></select></div><div><label class="sr-only" for="model-comparison-period">模型对比时间范围</label><select id="model-comparison-period"><option value="hours">24h</option><option value="days">7day</option></select></div></div>
+            <div class="comparison-total"><span>合计</span><strong id="model-comparison-total">—</strong><span id="model-comparison-unit">USD</span></div>
+            <ol id="model-comparison-list" class="comparison-list" tabindex="0" aria-label="各模型估算金额对比"></ol>
+            <p id="model-comparison-empty" class="comparison-empty" hidden>此时段暂无用量</p>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section usage-section" aria-labelledby="usage-title">
+      <div class="section-heading"><div><h2 id="usage-title">用量分析</h2></div></div>
+      <div class="panel breakdown-panel"><div class="subsection-heading"><div class="title-row"><h3>Token 构成</h3><details class="info-help"><summary aria-label="Token 构成说明">?</summary><div class="help-content"><strong>Token 构成说明</strong><p>累计用量 · Reasoning 已包含在 Output 中。</p><p>Codex 按账号隔离 · Antigravity 共享。</p></div></details></div></div><div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div></div>
       <div class="panel models-panel">
-        <div class="subsection-heading"><h3>各模型明细</h3><span class="section-note">按累计 Tokens 排序</span></div>
-        <p class="hint model-delete-hint">可删除某一 Provider / Model 的现有本地记录（先自动备份）；账号视图只清除该账号的 Codex 记录，共享模型在所有视图一并清除。未来的新用量仍会记录。</p>
+        <div class="subsection-heading"><div class="title-row"><h3>各模型明细</h3><details class="info-help"><summary aria-label="模型记录说明">?</summary><div class="help-content"><strong>模型记录说明</strong><p>可删除某一 Provider / Model 的现有本地记录（先自动备份）；账号视图只清除该账号的 Codex 记录，共享模型在所有视图一并清除。未来的新用量仍会记录。</p></div></details></div></div>
+
         <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 与估算费用明细，可横向滚动"></div>
         <details class="price-details disclosure"><summary>查看价格表与估算口径</summary><p class="hint">标准付费 API 文本 Token 标价（USD / 100 万 tokens），截至 <span id="price-date">—</span>。按每条账本记录分别计算后求和；超过模型阈值的请求使用高上下文价。Reasoning 计入 Output。Claude cache write 按 5 分钟价格估算；Gemini 缓存存储时长、音频/图像、工具费用及订阅折扣未计入。未匹配模型或无法定价的记录单独列为未计价，不当作零费用。新记录保留采集时的估算金额；未保存金额的旧记录按此版价格补估。</p><div id="price-table" class="table-scroll" tabindex="0" role="region" aria-label="公开 API 价格表，可横向滚动"></div></details>
       </div>
     </section>
 
     <details id="settings" class="settings-panel panel">
-      <summary>状态与设置 <span class="summary-note">端口、查询状态与刷新频率</span></summary>
+      <summary>状态与设置</summary>
       <div class="settings-content">
-        <p class="hint">Provider 状态为只读信息。后台间隔控制额度查询频率；页面每 5 秒读取本地缓存和账本增量，不会额外调用 Provider API。</p>
+        <details class="info-help"><summary aria-label="查询与刷新说明">?</summary><div class="help-content"><strong>查询与刷新说明</strong><p>Provider 状态为只读信息。后台间隔控制额度查询频率；页面每 5 秒读取本地缓存和账本增量，不会额外调用 Provider API。</p></div></details>
         <div class="provider-status-grid" aria-label="Provider 查询状态">
           <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div></article>
           <article class="provider-status"><h3>Claude</h3><div id="claude-query-status"></div></article>
@@ -137,13 +138,14 @@
         </div>
         <form id="port-form" class="port-settings"><label for="dashboard-port">控制台端口（1024–65535，下次启动生效）</label>
           <div class="form-row"><input id="dashboard-port" type="number" min="1024" max="65535" step="1" required aria-describedby="port-state port-hint"><button id="port-check" type="button">检测占用</button><button id="port-use-current" type="button">填入当前端口</button><button id="port-submit" type="submit">保存端口</button></div>
-          <p id="port-state" class="hint"></p><p id="port-hint" class="hint">保存前会检测占用，不会中断当前页面。检测仅代表当前状态，不预留端口；下次启动控制台时若被占用，会自动选择可用端口并提示你设置，不会自动覆盖已保存配置。</p>
+          <p id="port-state" class="hint"></p><details class="info-help"><summary aria-label="端口设置说明">?</summary><div class="help-content"><strong>端口设置说明</strong><p id="port-hint">保存前会检测占用，不会中断当前页面。检测仅代表当前状态，不预留端口；下次启动控制台时若被占用，会自动选择可用端口并提示你设置，不会自动覆盖已保存配置。</p></div></details>
           <p id="port-feedback" class="hint" role="status" aria-live="polite"></p>
         </form>
         <form id="interval-form"><label for="interval">后台刷新间隔（秒，60–3600）</label><div class="form-row"><input id="interval" type="number" min="60" max="3600" step="1" required><button id="interval-submit" type="submit">保存间隔</button></div></form>
+        <div class="appearance-settings"><div class="title-row"><label for="glass">玻璃效果强度</label><details class="info-help"><summary aria-label="外观说明">?</summary><div class="help-content"><strong>外观说明</strong><p>向右增强玻璃效果：背景更通透、模糊更明显。开启系统「降低透明度」时自动变为实心。</p></div></details></div><input id="glass" type="range" min="0" max="100" step="1" value="65"><div class="glass-scale"><span>实心</span><span>清透</span></div></div>
       </div>
     </details>
-    <footer><span id="last-check">连接本地 Pi 会话中…</span><span>Pi Quota Monitor <span aria-hidden="true">/</span> Local-first</span></footer>
+
   </main>
 
   <dialog id="account-switch-dialog" aria-labelledby="account-switch-title">

@@ -40,7 +40,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && node --check src/dashboard/client.js && npm test && npm run check:package",
+    "check": "npm run typecheck && node --check src/dashboard/client.js && node --check src/dashboard/enhance.js && npm test && npm run check:package",
     "check:package": "node scripts/check-package.mjs",
     "prepublishOnly": "npm run check"
   },

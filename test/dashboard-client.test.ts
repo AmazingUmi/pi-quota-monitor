@@ -6,11 +6,12 @@ import { dashboardFixture } from "./fixtures/dashboard-state.js";
 
 const html = readFileSync(new URL("../src/dashboard/index.html", import.meta.url), "utf8");
 const script = readFileSync(new URL("../src/dashboard/client.js", import.meta.url), "utf8");
+const enhance = readFileSync(new URL("../src/dashboard/enhance.js", import.meta.url), "utf8");
 const css = readFileSync(new URL("../src/dashboard/style.css", import.meta.url), "utf8");
 const windows: JSDOM[] = [];
 afterEach(() => { for (const dom of windows.splice(0)) dom.window.close(); });
 
-async function mount(state = dashboardFixture(), initiallyHidden = false) {
+async function mount(state = dashboardFixture(), initiallyHidden = false, withEnhancements = false) {
   const dom = new JSDOM(html, { url: "http://127.0.0.1:3000", runScripts: "outside-only", pretendToBeVisual: true });
   windows.push(dom);
   let hidden = initiallyHidden;
@@ -22,6 +23,7 @@ async function mount(state = dashboardFixture(), initiallyHidden = false) {
   dom.window.setInterval = vi.fn(() => ++intervalId);
   dom.window.clearInterval = vi.fn();
   new Script(script).runInContext(dom.getInternalVMContext());
+  if (withEnhancements) new Script(enhance).runInContext(dom.getInternalVMContext());
   await vi.waitFor(() => expect(dom.window.document.getElementById("connection-status")?.dataset.state).toBe("connected"));
   const get = <T extends HTMLElement = HTMLElement>(id: string) => dom.window.document.getElementById(id) as T;
   const setHidden = (value: boolean) => {
@@ -48,22 +50,21 @@ it("shows three desktop quota cards with their own statusbar switches", async ()
     const card = get(title).closest(".provider-card")!;
     const switchInput = get<HTMLInputElement>(id);
     expect(card.contains(switchInput)).toBe(true);
-    expect(switchInput.closest("label")?.textContent).toContain("pi-web 状态栏显示");
+    expect(switchInput.closest("label")?.textContent).toContain("状态栏显示");
     expect(switchInput.getAttribute("role")).toBe("switch");
     expect(switchInput.nextElementSibling?.classList.contains("switch-track")).toBe(true);
     expect(switchInput.checked).toBe(true);
     expect(get("settings").contains(switchInput)).toBe(false);
   }
   expect(css).toMatch(/\.provider-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
-  expect(css).toContain(".switch-input:checked + .switch-track");
-  expect(css).toContain(".switch-input:focus-visible + .switch-track");
+  expect(css).toMatch(/\.switch-input:checked\s*\+\s*\.switch-track/);
+  expect(css).toMatch(/\.switch-input:focus-visible\s*\+\s*\.switch-track/);
 });
 
 it("renders quota meters, compact totals, and distinct low-quota states", async () => {
   const { get, dom } = await mount();
   expect(get("overview-tokens").textContent).toBe("2,480,000");
   expect(get("overview-cost").textContent).toBe("$12.60");
-  expect(get<HTMLMeterElement>("context-meter").value).toBe(26);
   const codex = get("codex-windows").querySelectorAll("meter");
   expect([...codex].map((meter) => meter.value)).toEqual([61, 73]);
   expect(codex[0].getAttribute("aria-label")).toBe("Weekly Limit Remaining剩余百分比");
@@ -79,7 +80,7 @@ it("shows OAI total alongside remaining estimates and charts recorded periods wi
   const amounts = get("codex-windows").querySelector(".quota-money-values")!;
   expect(amounts.textContent).toContain("剩余估算$34.07");
   expect(amounts.textContent).toContain("总额估算$46.67");
-  expect(get("codex-windows").querySelector("summary")?.textContent).toBe("查看估算依据");
+  expect(get("codex-windows").querySelector("summary")?.textContent).toBe("?");
   expect(get("agy-windows").querySelector(".quota-money-values")).toBeNull();
   expect(get("claude-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
   expect(get("codex-period-chart").querySelectorAll("circle")).toHaveLength(2);
@@ -118,7 +119,8 @@ it("keeps both OAI amount labels visible while estimates are unavailable", async
   const weekly = get("codex-windows").querySelector(".quota-window")!;
   expect(weekly.querySelector(".quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
   expect(weekly.textContent).toContain("等待同一周期的第二次额度读数");
-  expect(weekly.querySelector("details")).toBeNull();
+  expect(weekly.querySelector("details")?.open).toBe(false);
+  expect(weekly.querySelector("details .help-content")?.textContent).toContain("等待同一周期的第二次额度读数");
   state.quotaEstimates.codex.weekly = dashboardFixture().quotaEstimates.codex.weekly;
   await reload();
   expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
@@ -202,7 +204,7 @@ it("does not reuse active Codex quota or money in other ledger views", async () 
   expect(get("claude-windows").querySelector("meter")?.value).toBe(55);
 });
 
-it("distinguishes unknown, not-applicable, and zero quota, and keeps estimate warnings visible", async () => {
+it("distinguishes unknown, not-applicable, and zero quota, and keeps estimate warnings available in help", async () => {
   const state = dashboardFixture();
   state.codex.value!.plan = "pro";
   delete state.codex.value!.fiveHour;
@@ -219,8 +221,6 @@ it("distinguishes unknown, not-applicable, and zero quota, and keeps estimate wa
   expect(get("codex-windows").textContent).toContain("Pro 暂无 5 小时限制");
   expect(get("codex-windows").querySelector(".quota-estimate-note")?.textContent).toContain("3 条未计价");
   expect(get("codex-windows").querySelector(".quota-estimate-note")?.textContent).toContain("账本汇总已过期");
-  expect(get("context-meter").hidden).toBe(true);
-  expect(get("overview-context").textContent).toBe("—");
 });
 
 it("retains time/model filters and accessible empty/unpriced states", async () => {
@@ -298,7 +298,7 @@ it("reports failed fetches and HTTP errors as disconnected, then recovers on a s
   fetch.mockRejectedValueOnce(new Error("本地会话已结束"));
   await reload();
   expect(get("connection-status").dataset.state).toBe("offline");
-  expect(get("connection-status").textContent).toBe("连接已断开");
+  expect(get("connection-status").getAttribute("aria-label")).toBe("连接已断开");
   expect(get("feedback").textContent).toBe("本地会话已结束");
   fetch.mockResolvedValueOnce(new Response("{}", { status: 503 }));
   await reload();
@@ -314,7 +314,7 @@ it("reports render exceptions without disconnecting or overwriting the error, th
   dom.window.eval("window.originalDashboardRender = render; render = () => { throw new Error('测试渲染异常'); }");
   await reload();
   expect(get("connection-status").dataset.state).toBe("connected");
-  expect(get("connection-status").textContent).toBe("本地已连接");
+  expect(get("connection-status").getAttribute("aria-label")).toBe("本地已连接");
   expect(get("feedback").textContent).toBe("页面渲染出错：测试渲染异常");
   get("refresh").click();
   await vi.waitFor(() => expect(get<HTMLButtonElement>("refresh").disabled).toBe(false));
@@ -488,14 +488,14 @@ it("normalizes and orders OAI/AGY windows without detaching their estimates or i
   expect(labels("agy-windows").slice(0, 3)).toEqual(["Weekly Limit Remaining", "5H Limit Remaining", "Daily limit"]);
   const windows = get("agy-windows").querySelectorAll(".quota-window");
   expect(windows[0].querySelector("meter")?.value).toBe(75);
-  expect(windows[0].querySelector("summary")?.textContent).toContain("$15.00");
-  expect(windows[1].querySelector("summary")?.textContent).toContain("$2.50");
+  expect(windows[0].querySelector(".quota-estimate-value")?.textContent).toContain("$15.00");
+  expect(windows[1].querySelector(".quota-estimate-value")?.textContent).toContain("$2.50");
   expect(state.antigravity.value!.groups[0].windows[0].label).toBe("5H Limit Remaining");
   await reload();
   expect(labels("agy-windows").slice(0, 2)).toEqual(labels("codex-windows"));
 });
 
-it("keeps correlated estimates visibly qualified while using the short amount labels", async () => {
+it("keeps correlated estimate qualifications in help while using the short amount labels", async () => {
   const state = dashboardFixture();
   state.quotaEstimates.codex.weekly.attribution = "correlated";
   state.quotaEstimates.codex.weekly.sampleIntervals = 2;
@@ -647,4 +647,147 @@ it("has unique IDs and working navigation/disclosure targets", async () => {
   for (const close of document.querySelectorAll<HTMLButtonElement>("[data-close-dialog]")) {
     expect(document.getElementById(close.dataset.closeDialog!)?.tagName).toBe("DIALOG");
   }
+});
+
+
+it("preserves ring help and focus through polls, and dismisses it with Escape or an outside click", async () => {
+  const state = dashboardFixture();
+  state.quotaEstimates.codex.weekly.attribution = "correlated";
+  const { get, dom, reload } = await mount(state, false, true);
+  const help = () => get("codex-windows").querySelector<HTMLDetailsElement>(".gauge-head .quota-money")!;
+  expect(help().open).toBe(false);
+  expect(help().textContent).toContain("条件估算 · 同区间可能含外部消耗");
+  help().querySelector("summary")!.click();
+  help().querySelector("summary")!.focus();
+  const before = help();
+  await reload();
+  expect(help()).toBe(before);
+  state.codex.value!.weekly!.remainingPercent = 0;
+  await reload();
+  expect(help().open).toBe(true);
+  expect(dom.window.document.activeElement).toBe(help().querySelector("summary"));
+  expect(get("codex-windows").querySelector(".gauge-num")?.textContent).toBe("0%");
+  expect(get("codex-windows").querySelectorAll(".gauge-value")).toHaveLength(1);
+  help().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(help().open).toBe(false);
+  help().querySelector("summary")!.click();
+  get("quota-title").click();
+  expect(help().open).toBe(false);
+});
+
+it("keeps login and unavailable-estimate notices in collapsed help", async () => {
+  const state = dashboardFixture();
+  state.claude = { error: "尚未登录 Claude" };
+  state.quotaEstimates.codex.weekly = { note: "等待同一周期的第二次额度读数。" };
+  const { get, dom } = await mount(state, false, true);
+  expect(get("connection-status").textContent).toBe("");
+  expect(dom.window.document.getElementById("intro-toggle")).toBeNull();
+  const loginHelp = get("claude-error").closest("details")!;
+  expect(loginHelp.open).toBe(false);
+  expect(loginHelp.textContent).toContain("尚未登录 Claude");
+  expect(loginHelp.dataset.state).toBe("warning");
+  const estimateHelp = get("codex-windows").querySelector("details")!;
+  expect(estimateHelp.open).toBe(false);
+  expect(estimateHelp.textContent).toContain("等待同一周期的第二次额度读数");
+  expect(get("codex-windows").querySelector(".gauge-row .quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
+  const remove = get("models").querySelector(".usage-delete")!;
+  expect(remove.querySelector("svg")).not.toBeNull();
+  expect(remove.textContent).toBe("");
+  expect(remove.getAttribute("aria-label")).toContain("删除 openai-codex / gpt-6-sol");
+});
+
+it("selects a ledger from the account menu without switching the logged-in account", async () => {
+  const { get, dom, state, fetch } = await mount(dashboardFixture(), false, true);
+  const menu = get<HTMLDetailsElement>("account-menu");
+  expect(menu.contains(get("usage-account"))).toBe(true);
+  expect(menu.contains(get("account-use"))).toBe(true);
+  expect(get("account-selection").textContent).toBe("工作账号");
+  menu.open = true;
+  fetch.mockImplementation(async (url: string) => new Response(JSON.stringify({ ...state,
+    selectedAccountId: new URL(url, "http://127.0.0.1").searchParams.get("account") || state.currentAccountId,
+  })));
+  get<HTMLSelectElement>("usage-account").value = "all";
+  get("usage-account").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(get("account-selection").textContent).toBe("总量"));
+  expect(menu.open).toBe(false);
+  expect(dom.window.document.activeElement).toBe(menu.querySelector("summary"));
+  expect(get("account-current").textContent).toBe("work-pro");
+  expect(get("codex-windows").querySelector(".gauge-num")?.textContent).toBe("—");
+  expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
+it.each(["hours", "days"] as const)("compares model totals within the %s range and keeps providers distinct", async (period) => {
+  const state = dashboardFixture();
+  const currentHour = Date.parse("2026-03-10T10:00:00Z");
+  state.usage.timeline.currentHour = currentHour;
+  state.usage.timeline.today = "2026-03-10";
+  const buckets = period === "hours"
+    ? [String(currentHour - 23 * 3600000), String(currentHour), String(currentHour - 24 * 3600000), String(currentHour + 3600000)]
+    : ["2026-03-04", "2026-03-10", "2026-03-03", "2026-03-11"];
+  const item = { provider: "openai-codex", model: "shared-model", pricedRecords: 1, unpricedRecords: 0 };
+  state.usage.timeline[period] = [
+    { ...item, bucket: buckets[0], totalTokens: 10, estimatedCostUsd: 1 },
+    { ...item, bucket: buckets[1], totalTokens: 20, estimatedCostUsd: 2 },
+    { ...item, provider: "antigravity", bucket: buckets[1], totalTokens: 5, estimatedCostUsd: 6 },
+    { ...item, bucket: buckets[2], totalTokens: 999, estimatedCostUsd: 99 },
+    { ...item, bucket: buckets[3], totalTokens: 888, estimatedCostUsd: 88 },
+  ];
+  const { dom, get, reload } = await mount(state, false, true);
+  const controls = get("model-comparison-period").parentElement!;
+  controls.querySelector<HTMLButtonElement>(`button[data-v="${period}"]`)!.click();
+  const list = get("model-comparison-list");
+  expect(get("model-comparison-total").textContent).toBe("$9.00");
+  expect([...list.querySelectorAll(".comparison-model-name")].map((name) => name.textContent))
+    .toEqual(["shared-model · antigravity", "shared-model · openai-codex"]);
+  expect([...list.querySelectorAll(".comparison-model-value")].map((value) => value.textContent)).toEqual(["$6.00", "$3.00"]);
+  expect([...list.querySelectorAll<HTMLElement>(".comparison-track > span")].map((bar) => bar.style.width)).toEqual(["100%", "50%"]);
+  get("model-comparison-metric").parentElement!.querySelector<HTMLButtonElement>('button[data-v="tokens"]')!.click();
+  expect(get("model-comparison-total").textContent).toBe("35");
+  expect([...list.querySelectorAll(".comparison-model-value")].map((value) => value.textContent)).toEqual(["30", "5"]);
+  expect(list.querySelector(".comparison-model-name")?.textContent).toContain("openai-codex");
+  const bars = list.querySelectorAll<HTMLElement>(".comparison-track > span");
+  expect(bars[0].style.width).toBe("100%");
+  expect(parseFloat(bars[1].style.width)).toBeCloseTo(5 / 30 * 100);
+  get<HTMLSelectElement>("chart-model").value = JSON.stringify(["openai-codex", "gpt-6-sol"]);
+  get("chart-model").dispatchEvent(new dom.window.Event("change"));
+  expect(get("model-comparison-total").textContent).toBe("35");
+  const first = list.firstElementChild;
+  await reload();
+  expect(list.firstElementChild).toBe(first);
+  expect(get<HTMLSelectElement>("model-comparison-metric").value).toBe("tokens");
+  expect(get<HTMLSelectElement>("model-comparison-period").value).toBe(period);
+  state.selectedAccountId = "all";
+  state.usage.timeline[period] = [];
+  await reload();
+  expect(get("account-selection").textContent).toBe("总量");
+  expect(get("model-comparison-empty").hidden).toBe(false);
+  expect(get("model-comparison-total").textContent).toBe("—");
+  expect(list.children).toHaveLength(0);
+});
+
+it("distinguishes unpriced, partially priced, and zero-cost models in comparison", async () => {
+  const state = dashboardFixture();
+  const item = { provider: "openai-codex", bucket: String(state.usage.timeline.currentHour) };
+  state.usage.timeline.hours = [
+    { ...item, model: "unknown", totalTokens: 900, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 2 },
+    { ...item, model: "free", totalTokens: 200, estimatedCostUsd: 0, pricedRecords: 1, unpricedRecords: 0 },
+    { ...item, model: "partial", totalTokens: 300, estimatedCostUsd: 2, pricedRecords: 1, unpricedRecords: 1 },
+  ];
+  const { get, dom, reload } = await mount(state);
+  const list = get("model-comparison-list");
+  expect(get("model-comparison-total").textContent).toBe("$2.00*");
+  expect(get("model-comparison-note").textContent).toContain("3 条未计价未纳入金额");
+  expect([...list.querySelectorAll(".comparison-model-value")].map((value) => value.textContent))
+    .toEqual(["$2.00*", "$0.0000", "未计价"]);
+  expect(list.querySelectorAll('.comparison-track[data-known="false"]')).toHaveLength(1);
+  state.usage.timeline.hours = state.usage.timeline.hours.slice(0, 1);
+  state.usage.stale = true;
+  await reload();
+  expect(get("model-comparison-total").textContent).toBe("—");
+  expect(get("model-comparison-empty").hidden).toBe(true);
+  expect(get("model-comparison-note").textContent).toContain("账本汇总已过期");
+  get<HTMLSelectElement>("model-comparison-metric").value = "tokens";
+  get("model-comparison-metric").dispatchEvent(new dom.window.Event("change"));
+  expect(get("model-comparison-total").textContent).toBe("900");
+  expect(list.querySelector(".comparison-model-value")?.textContent).toBe("900");
 });

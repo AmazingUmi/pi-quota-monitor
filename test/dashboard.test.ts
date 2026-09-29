@@ -46,19 +46,19 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain('<link rel="icon" type="image/svg+xml" href="/favicon.svg">');
   expect(html).toContain("chart-model");
   expect(html).toContain("usage-account");
-  expect([...html.matchAll(/<section class="section /g)]).toHaveLength(4);
+  expect([...html.matchAll(/<section class="section /g)]).toHaveLength(3);
   expect([...html.matchAll(/<h2 id="[^"]+"[^>]*>([^<]+)/g)].map((match) => match[1]))
-    .toEqual(["控制管理", "账本概览", "剩余额度", "用量分析"]);
+    .toEqual(["剩余额度", "账本概览", "用量分析"]);
   expect(html).toContain('class="skip-link"');
   expect(html).toContain('aria-label="页面导航"');
   expect(html).toContain('id="connection-status"');
-  expect(html).toContain('id="context-meter"');
+  expect(html).toContain('id="model-comparison-list"');
   expect(html).toContain("关于数据");
   expect(html).toContain("状态与设置");
   expect(html).toContain("两次已保存读数之间的 Token 时间戳匹配账本金额");
-  expect(html).toContain("在 pi-web 状态栏显示 OAI");
-  expect(html).toContain("在 pi-web 状态栏显示 AGY");
-  expect(html).toContain("在 pi-web 状态栏显示 CLA");
+  expect(html).toContain("状态栏显示 OAI");
+  expect(html).toContain("状态栏显示 AGY");
+  expect(html).toContain("状态栏显示 CLA");
   expect(html).toContain('id="claude-windows"');
   for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
     "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
@@ -66,7 +66,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
     "backup-location", "backup-directory", "backup-restore-path", "account-backup", "account-backup-create", "account-restore", "account-restore-path", "account-reset-profile", "account-reset-usage"]) {
     expect(html).toContain(`id="${id}"`);
   }
-  const controls = html.slice(html.indexOf('<section class="section control-section'), html.indexOf('<section class="section overview-section'));
+  const controls = html.slice(html.indexOf('<details class="account-menu"'), html.indexOf('</div></details>'));
   expect([...controls.matchAll(/<button[^>]+>([^<]+)<\/button>/g)].map((match) => match[1]))
     .toEqual(["切换账号", "新增账号", "管理账号", "历史记录"]);
   expect(controls).toContain('id="usage-account"');
@@ -81,14 +81,18 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).not.toContain("当前会话 Token");
   expect(html).not.toContain("Cost");
   const css = await (await fetch(`${origin}/style.css`)).text();
-  expect(css).toContain("prefers-color-scheme: dark");
-  expect(css).toContain("prefers-reduced-motion: reduce");
-  expect(css).toContain("forced-colors: active");
+  expect(css).toMatch(/prefers-color-scheme:\s*dark/);
+  expect(css).toMatch(/prefers-reduced-motion:\s*reduce/);
+  expect(css).toMatch(/forced-colors:\s*active/);
   expect(css).toContain(".chart-line");
   expect(css).toContain(".quota-meter");
   expect(css).toContain(".trend-grid");
   expect(css).toContain(":focus-visible");
   expect(css).toContain(".quota-money");
+  const enhanced = await fetch(`${origin}/enhance.js`);
+  expect(enhanced.status).toBe(200);
+  expect(enhanced.headers.get("Content-Type")).toContain("text/javascript");
+  expect(await enhanced.text()).toContain("updateQuotaContent");
   const favicon = await fetch(`${origin}/favicon.svg`);
   expect(favicon.status).toBe(200);
   expect(favicon.headers.get("Content-Type")).toContain("image/svg+xml");

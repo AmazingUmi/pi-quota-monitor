@@ -42,6 +42,21 @@ function notice(parent, value, neutral = false) {
   el.textContent = value;
   parent.append(el);
 }
+function infoHelp(label, key) {
+  const details = document.createElement("details");
+  details.className = "info-help";
+  if (key) details.dataset.key = key;
+  const summary = document.createElement("summary");
+  summary.textContent = "?";
+  summary.setAttribute("aria-label", label);
+  const content = document.createElement("div");
+  content.className = "help-content";
+  const heading = document.createElement("strong");
+  heading.textContent = label;
+  content.append(heading);
+  details.append(summary, content);
+  return { details, content };
+}
 function windowKind(window) {
   if (typeof window.windowMinutes === "number") return window.windowMinutes === 10080 ? "weekly" : window.windowMinutes === 300 ? "fiveHour" : "other";
   if (/\bweek(?:ly)?\b|每周|周额度|周窗口/i.test(window.label)) return "weekly";
@@ -100,8 +115,10 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
   meter.setAttribute("aria-label", `${label}剩余百分比`);
   const reset = document.createElement("small");
   reset.className = "subtle";
-  reset.textContent = notApplicable ? "Pro 暂无 5 小时限制" : window ? countdown(window.resetAt) : "未知 / 无数据";
-  if (typeof window?.resetAt === "number" && Number.isFinite(window.resetAt)) reset.dataset.resetAt = String(window.resetAt);
+  const resetKnown = typeof window?.resetAt === "number" && Number.isFinite(window.resetAt);
+  reset.textContent = resetKnown ? countdown(window.resetAt) : "";
+  reset.hidden = !resetKnown;
+  if (resetKnown) reset.dataset.resetAt = String(window.resetAt);
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   bar.dataset.known = String(known);
@@ -122,37 +139,40 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
       amounts.append(item);
     }
     container.append(amounts);
-    if (!estimated) notice(container, estimate?.note ?? "等待额度读数，暂不可估算金额。", true);
   }
-  if (estimate && !notApplicable && (!showTotal || estimated)) {
-    const amount = document.createElement("details");
-    amount.className = "quota-money";
-    amount.dataset.key = JSON.stringify([parent.dataset.group ?? "", label]);
-    const summary = document.createElement("summary");
+  if (estimate || showTotal || notApplicable) {
+    const { details: amount, content } = infoHelp(`${label} · 额度与估算说明`, JSON.stringify([parent.dataset.group ?? "", label]));
+    amount.classList.add("quota-money");
     const detail = document.createElement("p");
-    if (estimated) {
-      summary.textContent = showTotal ? "查看估算依据" : `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
+    if (notApplicable) {
+      detail.textContent = "Pro 暂无 5 小时限制";
+    } else if (estimated) {
+      if (!showTotal) {
+        const value = document.createElement("span");
+        value.className = "quota-estimate-value";
+        value.textContent = `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
+        container.append(value);
+      }
       const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ${estimate.sampleIntervals ?? 1} 个合格区间${estimate.quotaChanges ? ` / ${estimate.quotaChanges} 次额度下降` : ""}（范围内可能有排除区间） · ` : "";
       const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
-      detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note} 非账户余额。`;
+      detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note ?? ""} 非账户余额。`;
     } else {
-      summary.textContent = "金额暂不可估算";
-      detail.textContent = estimate.note;
+      detail.textContent = estimate?.note ?? "等待额度读数，暂不可估算金额。";
     }
-    amount.append(summary, detail);
+    content.append(detail);
+    if (estimated && estimate?.attribution === "correlated" && !notApplicable) {
+      const caveat = document.createElement("p");
+      caveat.className = "quota-estimate-note";
+      caveat.textContent = "条件估算 · 同区间可能含外部消耗";
+      content.append(caveat);
+    }
+    if (estimate && !notApplicable && (estimate.unpricedRecords || estimate.ledgerStale)) {
+      const warning = document.createElement("p");
+      warning.className = "quota-estimate-note";
+      warning.textContent = [estimate.unpricedRecords ? `${estimate.unpricedRecords} 条未计价，相关区间未用于校准` : "", estimate.ledgerStale ? "账本汇总已过期" : ""].filter(Boolean).join(" · ");
+      content.append(warning);
+    }
     container.append(amount);
-  }
-  if (estimated && estimate?.attribution === "correlated" && !notApplicable) {
-    const caveat = document.createElement("small");
-    caveat.className = "quota-estimate-note";
-    caveat.textContent = "条件估算 · 同区间可能含外部消耗";
-    container.append(caveat);
-  }
-  if (estimate && !notApplicable && (estimate.unpricedRecords || estimate.ledgerStale)) {
-    const warning = document.createElement("small");
-    warning.className = "quota-estimate-note";
-    warning.textContent = [estimate.unpricedRecords ? `${estimate.unpricedRecords} 条未计价，相关区间未用于校准` : "", estimate.ledgerStale ? "账本汇总已过期" : ""].filter(Boolean).join(" · ");
-    container.append(warning);
   }
   parent.append(container);
 }
@@ -196,6 +216,8 @@ function renderProviderErrors(container, cache, extraErrors = []) {
   container.dataset.messages = fingerprint;
   container.replaceChildren();
   for (const message of messages) notice(container, message);
+  const help = container.closest(".provider-help");
+  if (help) help.dataset.state = messages.length ? "warning" : "normal";
 }
 function statusDetails(container, cache, extraErrors = []) {
   row(container, "查询状态", queryLabel(cache, extraErrors.some(Boolean)));
@@ -273,10 +295,9 @@ function renderAntigravity(cache) {
           const candidates = models.filter((model) => new RegExp(group.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(`${model.modelId} ${model.displayName ?? ""}`));
           if (candidates.length) {
             for (const model of candidates) quotaWindow(items, `${model.displayName ?? model.modelId} · 模型额度`, model);
-            const fallbackNote = document.createElement("small");
-            fallbackNote.className = "quota-estimate-note";
-            fallbackNote.textContent = "模型回退数据未提供可识别的 5 小时 / 每周窗口，未推算金额。";
-            section.append(fallbackNote);
+            const help = infoHelp("模型额度说明", JSON.stringify(["fallback", group.name]));
+            notice(help.content, "模型回退数据未提供可识别的 5 小时 / 每周窗口，未推算金额。", true);
+            section.append(help.details);
           } else {
             quotaWindow(items, "额度窗口", undefined);
           }
@@ -299,16 +320,16 @@ function renderAntigravity(cache) {
         const items = document.createElement("div");
         items.className = "quota-windows";
         for (const model of groupModels) quotaWindow(items, model.displayName ?? model.modelId, model);
-        const fallbackNote = document.createElement("small");
-        fallbackNote.className = "quota-estimate-note";
-        fallbackNote.textContent = "旧版模型额度未提供可识别的 5 小时 / 每周窗口，未推算金额。";
-        section.append(heading, items, fallbackNote);
+        const help = infoHelp("模型额度说明", JSON.stringify(["fallback", name]));
+        notice(help.content, "旧版模型额度未提供可识别的 5 小时 / 每周窗口，未推算金额。", true);
+        section.append(heading, help.details, items);
         container.append(section);
       }
     } else {
       const empty = document.createElement("p");
-      empty.className = "hint";
-      empty.textContent = result ? "暂无额度窗口或模型额度数据。" : "尚无成功查询结果；额度数据未知。";
+      empty.className = "quota-empty";
+      empty.textContent = "—";
+      empty.setAttribute("aria-label", result ? "暂无额度窗口或模型额度数据" : "尚无成功查询结果；额度数据未知");
       container.append(empty);
     }
   });
@@ -329,6 +350,76 @@ function svgElement(name, attributes = {}, text) {
 }
 function calendarDay(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function renderModelComparison() {
+  if (!latest) return;
+  const period = $("model-comparison-period").value;
+  const isCost = $("model-comparison-metric").value === "cost";
+  const timeline = latest.usage.timeline;
+  const slots = new Set(period === "days" ? Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(`${timeline.today}T12:00:00`);
+    date.setDate(date.getDate() - index);
+    return calendarDay(date);
+  }) : Array.from({ length: 24 }, (_, index) => String(timeline.currentHour - index * 3600000)));
+  const groups = new Map();
+  for (const item of period === "days" ? timeline.days : timeline.hours) {
+    if (!slots.has(item.bucket)) continue;
+    const key = JSON.stringify([item.provider, item.model]);
+    const group = groups.get(key) ?? { provider: item.provider, model: item.model, totalTokens: 0, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0 };
+    for (const field of ["totalTokens", "estimatedCostUsd", "pricedRecords", "unpricedRecords"]) group[field] += item[field];
+    groups.set(key, group);
+  }
+  const field = isCost ? "estimatedCostUsd" : "totalTokens";
+  const models = [...groups.values()].sort((a, b) => {
+    // An unknown price is not a zero-dollar model; keep it after measured values.
+    if (isCost && !!a.pricedRecords !== !!b.pricedRecords) return a.pricedRecords ? -1 : 1;
+    return b[field] - a[field] || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
+  });
+  const total = models.reduce((sum, item) => sum + item[field], 0);
+  const peak = models.reduce((max, item) => Math.max(max, !isCost || item.pricedRecords > 0 ? item[field] : 0), 0);
+  const priced = models.reduce((sum, item) => sum + item.pricedRecords, 0);
+  const unpriced = models.reduce((sum, item) => sum + item.unpricedRecords, 0);
+  const totalKnown = models.length > 0 && (!isCost || priced > 0);
+  const format = isCost ? money : (value) => value.toLocaleString();
+  $("model-comparison-total").textContent = totalKnown ? `${format(total)}${isCost && unpriced ? "*" : ""}` : "—";
+  $("model-comparison-unit").textContent = isCost ? "USD" : "Tokens";
+  $("model-comparison-note").textContent = `${models.length} 个模型${isCost ? ` · ${priced} 条已计价${unpriced ? ` · ${unpriced} 条未计价未纳入金额` : ""}` : " · Total tokens，Reasoning 不重复计入"}${latest.usage.stale ? " · 账本汇总已过期，显示上次有效结果" : ""}`;
+  $("model-comparison-empty").hidden = models.length > 0;
+  const list = $("model-comparison-list");
+  list.setAttribute("aria-label", `${period === "days" ? "最近 7 天" : "最近 24 小时"}各模型${isCost ? "估算金额" : "Token"}对比`);
+  const fingerprint = JSON.stringify([latest.selectedAccountId, period, isCost, models]);
+  if (list.dataset.content === fingerprint) return;
+  list.dataset.content = fingerprint;
+  const previousScroll = list.dataset.scope === latest.selectedAccountId ? list.scrollTop : 0;
+  list.dataset.scope = latest.selectedAccountId;
+  list.replaceChildren();
+  for (const item of models) {
+    const known = !isCost || item.pricedRecords > 0;
+    const value = known ? `${format(item[field])}${isCost && item.unpricedRecords ? "*" : ""}` : "未计价";
+    const entry = document.createElement("li");
+    entry.className = "comparison-item";
+    const header = document.createElement("div");
+    header.className = "comparison-item-heading";
+    const name = document.createElement("span");
+    name.className = "comparison-model-name";
+    name.textContent = item.model;
+    name.title = `${item.provider} / ${item.model}`;
+    if (models.some((other) => other !== item && other.model === item.model)) name.textContent += ` · ${item.provider}`;
+    const amount = document.createElement("strong");
+    amount.className = "comparison-model-value";
+    amount.textContent = value;
+    header.append(name, amount);
+    const track = document.createElement("div");
+    track.className = "comparison-track";
+    track.dataset.known = String(known);
+    track.setAttribute("aria-hidden", "true");
+    const bar = document.createElement("span");
+    bar.style.width = `${known && peak > 0 ? Math.min(100, Math.max(0, item[field] / peak * 100)) : 0}%`;
+    track.append(bar);
+    entry.append(header, track);
+    list.append(entry);
+  }
+  list.scrollTop = previousScroll;
 }
 function renderTrend(field, chartId, summaryId) {
   if (!latest) return;
@@ -520,6 +611,10 @@ function render() {
     }
   }
   account.value = latest.selectedAccountId ?? "all";
+  const ledgerLabel = account.value === "all" ? "总量" : accountChoices.find((choice) => choice.id === account.value)?.name ?? "当前账户";
+  $("account-selection").textContent = ledgerLabel;
+  $("account-selection").title = ledgerLabel;
+  $("account-menu").querySelector("summary").setAttribute("aria-label", `账户选择：${ledgerLabel}`);
   const profiles = latest.profiles ?? [];
   for (const id of ["account-switch-profile", "account-manage-profile", "account-reset-profile"]) {
     const select = $(id);
@@ -576,13 +671,7 @@ function render() {
   $("overview-cost-detail").textContent = `${ledgerName} · ${pricing.unpricedRecords
     ? `${pricing.pricedRecords ? "部分估算" : "暂无可估算费用"} · ${pricing.unpricedRecords.toLocaleString()} 条未计价（${pricing.unpricedTokens.toLocaleString()} tokens）`
     : pricing.pricedRecords ? `${pricing.pricedRecords.toLocaleString()} 条已计价 · API 标价` : "暂无可计价记录"}${usage.stale ? " · 账本汇总已过期" : ""}`;
-  const context = latest.context;
-  $("overview-context").textContent = typeof context?.percent === "number" ? `${Math.round(context.percent)}%` : "—";
-  const contextKnown = typeof context?.percent === "number" && Number.isFinite(context.percent);
-  $("context-meter").hidden = !contextKnown;
-  $("context-meter").value = contextKnown ? Math.max(0, Math.min(100, context.percent)) : 0;
-  $("context-meter").dataset.level = context?.percent >= 90 ? "low" : context?.percent >= 75 ? "warning" : "normal";
-  $("overview-context-detail").textContent = context ? `${context.tokens === null ? "未知" : Number(context.tokens).toLocaleString()} / ${Number(context.contextWindow).toLocaleString()} tokens` : "当前模型未提供上下文窗口";
+  renderModelComparison();
   const columns = [["Input", "input"], ["Output", "output"], ["Reasoning", "reasoning"], ["Cache read", "cacheRead"], ["Cache write", "cacheWrite"], ["Total tokens", "totalTokens"]];
   const tokens = $("tokens");
   tokens.replaceChildren();
@@ -615,6 +704,7 @@ function render() {
   models.replaceChildren();
   if (usage.models.length) {
     const table = document.createElement("table");
+    table.className = "models-table";
     const caption = document.createElement("caption");
     caption.className = "sr-only";
     caption.textContent = "按 Provider 和模型分组，Total tokens 降序";
@@ -642,7 +732,10 @@ function render() {
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "button-danger usage-delete";
-      remove.textContent = "删除记录";
+      const icon = svgElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 1.7, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" });
+      icon.append(svgElement("path", { d: "M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" }));
+      remove.append(icon);
+      remove.title = "删除本地用量记录";
       remove.setAttribute("aria-label", `删除 ${item.provider} / ${item.model} 的本地用量记录`);
       remove.disabled = busy || usage.stale;
       remove.addEventListener("click", () => { void deleteUsageRow(item); });
@@ -736,14 +829,16 @@ async function load() {
   latest = state;
   selectedAccount = state.selectedAccountId;
   $("connection-status").dataset.state = "connected";
-  $("connection-status").textContent = "本地已连接";
+  $("connection-status").setAttribute("aria-label", "本地已连接");
+  $("connection-status").title = "本地已连接";
   if (!safeRender()) return false;
   if (!busy) $("feedback").textContent = "";
   return true;
 }
 function loadError(error) {
   $("connection-status").dataset.state = "offline";
-  $("connection-status").textContent = "连接已断开";
+  $("connection-status").setAttribute("aria-label", "连接已断开");
+  $("connection-status").title = "连接已断开";
   $("feedback").textContent = error.message || "无法连接本地 Pi 会话";
 }
 function syncStatusbarControls() {
@@ -854,6 +949,19 @@ for (const tip of document.querySelectorAll(".help-tip")) {
   document.addEventListener("click", (event) => { if (!tip.contains(event.target)) { pinned = false; show(false); } });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { pinned = false; show(false); } });
 }
+// Delegation also covers quota help rebuilt by the cache poll.
+document.addEventListener("click", (event) => {
+  for (const detail of document.querySelectorAll(".info-help[open]")) {
+    if (!detail.contains(event.target)) detail.open = false;
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  for (const detail of document.querySelectorAll(".info-help[open]")) {
+    if (detail.contains(document.activeElement)) detail.querySelector("summary").focus();
+    detail.open = false;
+  }
+});
 $("port-open-settings").addEventListener("click", () => {
   $("settings").open = true;
   $("settings").scrollIntoView({ block: "start" });
@@ -946,6 +1054,8 @@ $("codex-period-kind").addEventListener("change", renderCodexPeriodChart);
 $("chart-view").addEventListener("change", renderChart);
 $("chart-period").addEventListener("change", renderChart);
 $("chart-model").addEventListener("change", renderChart);
+$("model-comparison-metric").addEventListener("change", renderModelComparison);
+$("model-comparison-period").addEventListener("change", renderModelComparison);
 $("interval-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const seconds = Number($("interval").value);

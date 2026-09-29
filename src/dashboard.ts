@@ -108,15 +108,16 @@ export class QuotaDashboard {
   }
 
   private async listen(requestedPort: number): Promise<string> {
-    const [html, script, style, icon] = await Promise.all([
+    const [html, script, enhance, style, icon] = await Promise.all([
       readFile(new URL("./dashboard/index.html", import.meta.url)),
       readFile(new URL("./dashboard/client.js", import.meta.url)),
+      readFile(new URL("./dashboard/enhance.js", import.meta.url)),
       readFile(new URL("./dashboard/style.css", import.meta.url)),
       readFile(new URL("./dashboard/favicon.svg", import.meta.url)),
     ]);
     if (this.closed) throw new Error("Dashboard was closed.");
     const server = createServer((req, res) => {
-      void this.handle(req, res, { html, script, style, icon }).catch(() => {
+      void this.handle(req, res, { html, script, enhance, style, icon }).catch(() => {
         if (!res.headersSent) reply(res, 500, JSON.stringify({ error: "Request failed" }));
         else res.destroy();
       });
@@ -149,7 +150,7 @@ export class QuotaDashboard {
   private async handle(
     req: IncomingMessage,
     res: ServerResponse,
-    assets: { html: Buffer; script: Buffer; style: Buffer; icon: Buffer },
+    assets: { html: Buffer; script: Buffer; enhance: Buffer; style: Buffer; icon: Buffer },
   ): Promise<void> {
     const origin = this.origin;
     if (!origin || req.headers.host !== new URL(origin).host) {
@@ -163,6 +164,8 @@ export class QuotaDashboard {
         reply(res, 200, assets.html.toString("utf8"), "text/html; charset=utf-8");
       } else if (pathname === "/client.js") {
         reply(res, 200, assets.script.toString("utf8"), "text/javascript; charset=utf-8");
+      } else if (pathname === "/enhance.js") {
+        reply(res, 200, assets.enhance.toString("utf8"), "text/javascript; charset=utf-8");
       } else if (pathname === "/style.css") {
         reply(res, 200, assets.style.toString("utf8"), "text/css; charset=utf-8");
       } else if (pathname === "/favicon.svg") {
