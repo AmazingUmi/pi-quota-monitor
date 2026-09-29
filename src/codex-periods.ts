@@ -183,6 +183,27 @@ export class CodexPeriodStore {
     }
   }
 
+  /** Usage deletion invalidates stored quotes, including closed periods that cannot be recalibrated. */
+  async invalidateEstimates(): Promise<void> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const release = await lockfile.lock(this.directory, { realpath: false, retries: { retries: 5, minTimeout: 20 }, stale: 30_000 });
+    const tmp = join(this.directory, `${randomUUID()}.tmp`);
+    try {
+      const before = await this.readPeriods();
+      const after = before.map((period) => {
+        const { estimatedTotalUsd: _cost, estimateAsOf: _at, sampleStartAt: _start, sampleEndAt: _end,
+          usedPercent: _used, piAttributedPercent: _pi, calibrationPercent: _calibration,
+          sampleIntervals: _intervals, quotaChanges: _changes, excludedIntervals: _excluded,
+          attribution: _attribution, calibrationVersion: _version, ...withoutQuote } = period;
+        return withoutQuote;
+      });
+      if (JSON.stringify(before) !== JSON.stringify(after)) {
+        await writeFile(tmp, JSON.stringify({ version: 1, periods: after }) + "\n", { mode: 0o600, flag: "wx" });
+        await rename(tmp, this.path);
+      }
+    } finally { try { await rm(tmp, { force: true }); } finally { await release(); } }
+  }
+
   async update(readings: CodexQuota[], estimates: QuotaAmountEstimates["codex"]): Promise<CodexPeriod[]> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const release = await lockfile.lock(this.directory, { realpath: false, retries: { retries: 5, minTimeout: 20 }, stale: 30_000 });

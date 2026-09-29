@@ -31,6 +31,7 @@ export interface DashboardState {
 export interface DashboardActions {
   state(accountId?: string): DashboardState | Promise<DashboardState>;
   accountCommand?(command: string, args: string): Promise<void>;
+  deleteUsage?(account: string, provider: string, model: string): Promise<{ removed: number }>;
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
   setPort(port: number): Promise<void>;
@@ -207,6 +208,26 @@ export class QuotaDashboard {
     }
     if (req.method !== "POST" || !isControlRequest(req, origin, this.nonce)) {
       reply(res, 403, JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+    if (pathname === "/api/usage-delete") {
+      if (!this.actions.deleteUsage) { reply(res, 404, JSON.stringify({ error: "Not found" })); return; }
+      let body: unknown;
+      try { body = await readSmallJson(req); }
+      catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
+      if (!body || typeof body !== "object" || Array.isArray(body)) { reply(res, 400, JSON.stringify({ error: "Invalid usage selection" })); return; }
+      const { account, provider, model } = body as { account?: unknown; provider?: unknown; model?: unknown };
+      if (typeof account !== "string" || (account !== "all" && !/^account:.{1,256}$/.test(account))
+        || typeof provider !== "string" || !provider || provider.length > 256
+        || typeof model !== "string" || !model || model.length > 256) {
+        reply(res, 400, JSON.stringify({ error: "Invalid usage selection" })); return;
+      }
+      try {
+        const result = await this.actions.deleteUsage(account, provider, model);
+        reply(res, 200, JSON.stringify({ ok: true, removed: result.removed }));
+      } catch {
+        reply(res, 409, JSON.stringify({ error: "删除未完成：账本可能已变化、存在损坏记录或无法备份。请检查 Pi 本地数据。" }));
+      }
       return;
     }
     if (pathname === "/api/account-command") {

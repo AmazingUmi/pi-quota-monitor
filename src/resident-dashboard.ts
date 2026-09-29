@@ -3,7 +3,7 @@ import { configDirectory } from "./config.js";
 
 /** Static assets are captured when the HTTP server first starts. Increment when the
  * bundled dashboard changes, so /reload does not keep serving an older UI. */
-const ASSETS_VERSION = 5;
+const ASSETS_VERSION = 6;
 
 /** Process-owned socket; session replacement swaps delegates without rebinding the listening port. */
 class ResidentDashboard {
@@ -30,6 +30,7 @@ class ResidentDashboard {
     },
     refresh: () => this.connected().refresh(),
     accountCommand: (command, args) => this.connected().accountCommand!(command, args),
+    deleteUsage: (account, provider, model) => this.connected().deleteUsage!(account, provider, model),
     setInterval: (seconds) => this.connected().setInterval(seconds),
     setPort: (port) => this.connected().setPort(port),
     setStatusbar: (settings) => this.connected().setStatusbar(settings),

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readStoredCredential, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "./accounts.js";
-import { backupHistory, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
+import { backupHistory, deleteModelUsage, importHistory, inspectHistory, listBackups, resetAccountUsage } from "./history.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import type { QuotaDashboard } from "./dashboard.js";
 import { attachDashboard, detachDashboard } from "./resident-dashboard.js";
@@ -562,6 +562,30 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
               ...(currentContext?.isIdle?.() === false ? { deliverAs: "followUp" as const } : {}),
             });
           },
+          deleteUsage: async (account, provider, model) => {
+            if (!live(epoch)) throw new Error("Session is no longer active.");
+            await ledgerQueue;
+            const { accounts } = await ensureViews();
+            if (!accounts.some((item) => item.id === account)) throw new Error("Unknown ledger view.");
+            const view = views.get(account)!;
+            await view.refresh();
+            if (!live(epoch) || !view.state().models.some((item) => item.provider === provider && item.model === model)) {
+              throw new Error("Model no longer appears in the selected ledger.");
+            }
+            const result = await deleteModelUsage(provider, model, account === "all" ? undefined : account.slice("account:".length));
+            if (result.removed && provider === "openai-codex") {
+              const affected = new Set(result.codexAccountIds);
+              if (result.unassignedCodex) for (const item of accounts) {
+                if (item.id.startsWith("account:")) affected.add(item.id.slice("account:".length));
+              }
+              try { await Promise.all([...affected].map((id) => new CodexPeriodStore(id).invalidateEstimates())); }
+              catch { codex.storageError = "周期估算记录失效处理失败；请检查本地周期文件。"; }
+            }
+            dailyDate = "";
+            await updateDailyDate(epoch);
+            await Promise.all(accountAggregators.map((item) => item.refresh()));
+            return { removed: result.removed };
+          },
           refresh: async () => {
             if (!live(epoch) || !currentContext) throw new Error("Session is no longer active.");
             await refreshAll(currentContext, true);
@@ -713,6 +737,8 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!ctx.hasUI) throw new Error("Reset requires an interactive confirmation.");
           if (!await ctx.ui.confirm("清除本地用量", `清除 ${extra} 的本地 Codex 用量？将先备份，不能重置 OpenAI 实际额度。`)) return;
           const result = await resetAccountUsage(profile.accountId);
+          try { await new CodexPeriodStore(profile.accountId).invalidateEstimates(); }
+          catch { codex.storageError = "周期估算记录失效处理失败；请检查本地周期文件。"; }
           dailyDate = "";
           await updateDailyDate(generation);
           await Promise.all(accountAggregators.map((view) => view.refresh()));

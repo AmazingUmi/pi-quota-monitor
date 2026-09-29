@@ -59,6 +59,24 @@ it("persists explicitly labeled conditional quotes without claiming verified Pi 
   });
 });
 
+it("invalidates cached active and closed period quotes after usage deletion", async () => {
+  const root = await mkdtemp(join(tmpdir(), "deleted-periods-")); roots.push(root);
+  const store = new CodexPeriodStore("deleted-account", root);
+  const readings = [quota(start, 90), quota(start + 60_000, 80), quota(start + 120_000, 100), quota(start + 180_000, 90)];
+  const quote: QuotaAmountEstimates["codex"] = { ...estimates(start + 180_000, 90), weekly: {
+    ...estimates(start + 180_000, 90).weekly, sampleStartAt: start + 120_000,
+  } };
+  await store.update(readings.slice(0, 2), estimates(start + 60_000, 80));
+  await store.update(readings, quote);
+  expect((await store.load()).filter((p) => p.kind === "weekly").map((p) => p.estimatedTotalUsd)).toEqual([80, 90]);
+  await store.invalidateEstimates();
+  await store.invalidateEstimates();
+  const periods = (await store.load()).filter((p) => p.kind === "weekly");
+  expect(periods).toHaveLength(2);
+  expect(periods[0]).toMatchObject({ closedAt: start + 120_000, boundary: "increase" });
+  expect(periods.every((p) => p.estimatedTotalUsd === undefined && p.attribution === undefined)).toBe(true);
+});
+
 it("invalidates pre-plateau weekly quotes but preserves current-calibration snapshots", () => {
   const old = { ...advanceCodexPeriods([], [quota(start, 80)])[1], estimatedTotalUsd: 80,
     attribution: "correlated" as const, calibrationPercent: 10, sampleIntervals: 1 };

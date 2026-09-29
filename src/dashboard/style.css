@@ -224,6 +224,8 @@ td:first-child { color: var(--muted); }
 td:nth-child(2) { max-width: 230px; overflow-wrap: anywhere; white-space: normal; font-weight: 550; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--soft); }
+.model-delete-hint { margin: -6px 0 12px; }
+.usage-delete { min-height: 30px; padding: 4px 8px; }
 .price-details { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 .settings-panel { margin-top: 32px; padding: 18px 24px; }
 .settings-panel > summary { font-size: 13px; }

@@ -239,6 +239,42 @@ it("retains time/model filters and accessible empty/unpriced states", async () =
   expect(get("cost-chart").querySelector(".empty-state")).toBeNull();
 });
 
+it("confirms and deletes the selected provider/model row, then refreshes totals and reports failures", async () => {
+  const { dom, get, state, fetch } = await mount();
+  const confirm = vi.fn(() => false);
+  dom.window.confirm = confirm;
+  const button = get("models").querySelector<HTMLButtonElement>(".usage-delete")!;
+  expect(button.getAttribute("aria-label")).toContain("openai-codex / gpt-6-sol");
+  const initialRequests = fetch.mock.calls.length;
+  button.click();
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("此账号视图中 openai-codex / gpt-6-sol"));
+  expect(fetch.mock.calls.length).toBe(initialRequests);
+  confirm.mockReturnValue(true);
+  fetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      state.usage.models = state.usage.models.slice(1);
+      state.usage.records = 48;
+      state.usage.totals.totalTokens = 970000;
+      state.usage.pricing.estimatedCostUsd = 7.06;
+      return new Response(JSON.stringify({ ok: true, removed: 80 }));
+    }
+    return new Response(JSON.stringify(state));
+  });
+  button.click();
+  await vi.waitFor(() => expect(get("feedback").textContent).toContain("已删除 80 条"));
+  expect(fetch).toHaveBeenCalledWith("/api/usage-delete", expect.objectContaining({
+    method: "POST", headers: expect.objectContaining({ "X-Quota-Control": "test-control" }),
+    body: JSON.stringify({ account: "account:pro", provider: "openai-codex", model: "gpt-6-sol" }),
+  }));
+  expect(get("overview-tokens").textContent).toBe("970,000");
+  expect(get("models").textContent).not.toContain("gpt-6-sol");
+  expect([...get<HTMLSelectElement>("chart-model").options].map((option) => option.value)).not.toContain(JSON.stringify(["openai-codex", "gpt-6-sol"]));
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "删除未完成" }), { status: 409 }));
+  get("models").querySelector<HTMLButtonElement>(".usage-delete")!.click();
+  await vi.waitFor(() => expect(get("feedback").textContent).toBe("删除未完成"));
+  expect(get("models").querySelector<HTMLButtonElement>(".usage-delete")!.disabled).toBe(false);
+});
+
 it("keeps refresh/settings actions authenticated and restores controls after failure", async () => {
   const { get, dom, fetch } = await mount();
   get("refresh").click();

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile, rename, rm, chmod, lstat, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import lockfile from "proper-lockfile";
@@ -6,11 +6,40 @@ import { configDirectory, usageDirectory } from "./config.js";
 import { accountId, credential, listAccounts } from "./accounts.js";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { ledgerDateMatches } from "./tokens/ledger-date.js";
+import { usageIdentity } from "./tokens/identity.js";
+import type { TokenUsageRecord } from "./types.js";
 
 const LEDGER = /^usage-\d{4}-\d{2}-\d{2}\.jsonl$/;
 const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const backupDir = () => join(configDirectory(), "backups");
 const lockPath = () => join(configDirectory(), "ledger.guard");
+const deletionsPath = () => join(configDirectory(), "usage-deletions.json");
+const deletionKey = (identity: string) => createHash("sha256").update(identity).digest("hex");
+
+async function readUsageDeletions(): Promise<Set<string>> {
+  try {
+    const path = deletionsPath();
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error("Invalid usage deletion history.");
+    const data: unknown = JSON.parse(await readFile(path, "utf8"));
+    if (!data || typeof data !== "object" || (data as { schema?: unknown }).schema !== 1
+      || !Array.isArray((data as { identities?: unknown }).identities)
+      || !(data as { identities: unknown[] }).identities.every((id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id))) {
+      throw new Error("Invalid usage deletion history.");
+    }
+    return new Set((data as { identities: string[] }).identities);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+    throw error;
+  }
+}
+async function writeUsageDeletions(identities: Set<string>): Promise<void> {
+  await atomic(deletionsPath(), JSON.stringify({ schema: 1, identities: [...identities].sort() }) + "\n");
+}
+/** Called only inside the ledger lock, so a deleted child cannot be reconciled during removal. */
+export async function isUsageDeleted(identity: string): Promise<boolean> {
+  return (await readUsageDeletions()).has(deletionKey(identity));
+}
 
 /** Move pre-usage/ ledgers under the same lock used by append, backup and reset. */
 async function migrateLegacyUsage(): Promise<void> {
@@ -73,6 +102,7 @@ interface Snapshot {
   createdAt: string;
   profiles: Array<{ name: string; credential: Record<string, unknown> }>;
   ledgers: Record<string, string>;
+  deletedIdentities?: string[];
 }
 function validLine(line: string, filename: string): boolean {
   try {
@@ -103,7 +133,8 @@ async function snapshot(): Promise<Snapshot> {
   for (const entry of await readdir(usageDirectory(), { withFileTypes: true })) {
     if (entry.isFile() && LEDGER.test(entry.name)) ledgers[entry.name] = await readFile(join(usageDirectory(), entry.name), "utf8");
   }
-  return { schema: 1, createdAt: new Date().toISOString(), profiles: accounts, ledgers };
+  return { schema: 1, createdAt: new Date().toISOString(), profiles: accounts, ledgers,
+    deletedIdentities: [...await readUsageDeletions()].sort() };
 }
 async function backupLocation(directory?: string): Promise<string> {
   if (directory === undefined) {
@@ -150,6 +181,8 @@ function parseSnapshot(data: unknown): Snapshot {
   for (const [filename, content] of Object.entries(raw.ledgers)) {
     if (!LEDGER.test(filename) || typeof content !== "string" || lines(content).some((line) => !validLine(line, filename))) throw new Error("Invalid backup ledger.");
   }
+  if (raw.deletedIdentities !== undefined && (!Array.isArray(raw.deletedIdentities)
+    || raw.deletedIdentities.some((id) => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)))) throw new Error("Invalid backup.");
   return raw as Snapshot;
 }
 /** Merge records by occurrence count, so restoring a backup twice never doubles usage. */
@@ -190,6 +223,9 @@ export async function importHistory(path: string): Promise<{ profiles: number; r
         records += missing.length;
       }
     }
+    const existingDeletions = await readUsageDeletions();
+    const mergedDeletions = new Set([...existingDeletions, ...(data.deletedIdentities ?? [])]);
+    const updateDeletions = mergedDeletions.size !== existingDeletions.size;
     const created: string[] = [];
     const changed: typeof changes = [];
     try {
@@ -199,6 +235,7 @@ export async function importHistory(path: string): Promise<{ profiles: number; r
         created.push(dest);
       }
       for (const change of changes) { await atomic(change.path, change.after); changed.push(change); }
+      if (updateDeletions) await writeUsageDeletions(mergedDeletions);
     } catch (error) {
       for (const change of changed.reverse()) {
         if (change.before === undefined) await rm(change.path, { force: true });
@@ -210,33 +247,69 @@ export async function importHistory(path: string): Promise<{ profiles: number; r
     return { profiles: newProfiles.length, records };
   });
 }
-export async function resetAccountUsage(id: string): Promise<{ backup: string; removed: number }> {
-  if (!id) throw new Error("An account ID is required.");
+async function removeUsageRecords(
+  matches: (record: TokenUsageRecord) => boolean, damagedMessage: string,
+): Promise<{ backup?: string; removed: number; codexAccountIds: string[]; unassignedCodex: boolean }> {
   return withLedgerLock(async () => {
     const changes: Array<{ path: string; before: string; after: string }> = [];
+    const originalDeletions = await readUsageDeletions();
+    const deletions = new Set(originalDeletions);
     let removed = 0;
+    const codexAccountIds = new Set<string>();
+    let unassignedCodex = false;
     for (const entry of await readdir(usageDirectory(), { withFileTypes: true })) {
       if (!entry.isFile() || !LEDGER.test(entry.name)) continue;
       const file = join(usageDirectory(), entry.name);
       const original = await readFile(file, "utf8");
       const rows = lines(original);
-      if ((original && !original.endsWith("\n")) || rows.some((line) => !validLine(line, entry.name))) {
-        throw new Error("Ledger contains an incomplete or damaged line; reset aborted without changing usage.");
-      }
+      if ((original && !original.endsWith("\n")) || rows.some((line) => !validLine(line, entry.name))) throw new Error(damagedMessage);
       const kept = rows.filter((line) => {
-        const record = JSON.parse(line) as Record<string, unknown>;
-        if (record.provider === "openai-codex" && record.accountId === id) { removed++; return false; }
-        return true;
+        const record = JSON.parse(line) as TokenUsageRecord;
+        if (!matches(record)) return true;
+        removed++;
+        if (record.provider === "openai-codex") {
+          if (record.accountId) codexAccountIds.add(record.accountId);
+          else unassignedCodex = true;
+        }
+        const identity = usageIdentity(record);
+        if (identity) deletions.add(deletionKey(identity));
+        return false;
       });
       if (kept.length !== rows.length) changes.push({ path: file, before: original, after: kept.length ? kept.join("\n") + "\n" : "" });
     }
+    if (!removed) return { removed: 0, codexAccountIds: [], unassignedCodex: false };
     const backup = await backupUnlocked();
     const written: typeof changes = [];
-    try { for (const change of changes) { await atomic(change.path, change.after); written.push(change); } }
-    catch (error) {
+    const changedDeletions = deletions.size !== originalDeletions.size;
+    try {
+      if (changedDeletions) await writeUsageDeletions(deletions);
+      for (const change of changes) { await atomic(change.path, change.after); written.push(change); }
+    } catch (error) {
       for (const change of written.reverse()) await atomic(change.path, change.before);
+      if (changedDeletions) {
+        if (originalDeletions.size) await writeUsageDeletions(originalDeletions);
+        else await rm(deletionsPath(), { force: true });
+      }
       throw error;
     }
-    return { backup, removed };
+    return { backup, removed, codexAccountIds: [...codexAccountIds], unassignedCodex };
   });
+}
+
+/** Delete the visible provider/model row. In account views, only that account's Codex rows are removed. */
+export async function deleteModelUsage(provider: string, model: string, accountId?: string): Promise<{
+  backup?: string; removed: number; codexAccountIds: string[]; unassignedCodex: boolean;
+}> {
+  if (!provider || !model) throw new Error("A provider and model are required.");
+  return removeUsageRecords((record) => record.provider === provider && record.model === model
+    && (accountId === undefined || provider !== "openai-codex" || record.accountId === accountId),
+  "Ledger contains an incomplete or damaged line; deletion aborted without changing usage.");
+}
+
+export async function resetAccountUsage(id: string): Promise<{ backup: string; removed: number }> {
+  if (!id) throw new Error("An account ID is required.");
+  const result = await removeUsageRecords((record) => record.provider === "openai-codex" && record.accountId === id,
+    "Ledger contains an incomplete or damaged line; reset aborted without changing usage.");
+  // Keep the existing reset behavior: even an empty account produces a backup.
+  return { removed: result.removed, backup: result.backup ?? await backupHistory() };
 }

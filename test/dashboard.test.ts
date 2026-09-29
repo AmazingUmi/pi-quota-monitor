@@ -174,6 +174,30 @@ it("exposes only allowlisted account-scoped OAI period fields", async () => {
   expect(JSON.stringify(response)).not.toContain("must-not-leak");
 });
 
+it("requires same-origin control and a bounded model selection before deleting usage", async () => {
+  const deleteUsage = vi.fn(async () => ({ removed: 2 }));
+  const dashboard = new QuotaDashboard({ state: () => state, refresh: async () => {}, setInterval: async () => {},
+    setStatusbar: async () => {}, setPort: async () => {}, deleteUsage });
+  running.push(dashboard);
+  const origin = await dashboard.start(0);
+  const { control } = await (await fetch(`${origin}/api/state`)).json() as { control: string };
+  const headers = { Origin: origin, "X-Quota-Control": control, "Content-Type": "application/json" };
+  const post = (body: unknown, requestHeaders = headers) => fetch(`${origin}/api/usage-delete`, {
+    method: "POST", headers: requestHeaders, body: JSON.stringify(body),
+  });
+  expect((await post({ account: "all", provider: "subagent-unattributed", model: "unknown-subagent" },
+    { ...headers, Origin: "https://other.example" })).status).toBe(403);
+  for (const body of [{ account: "", provider: "antigravity", model: "x" }, { account: "account:", provider: "a", model: "b" },
+    { account: "all", provider: "", model: "x" }, { account: "all", provider: "a", model: "x".repeat(300) },
+    { account: "all", provider: "a", model: 1 }]) expect((await post(body)).status).toBe(400);
+  expect(deleteUsage).not.toHaveBeenCalled();
+  const response = await post({ account: "all", provider: "subagent-unattributed", model: "unknown-subagent" });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: true, removed: 2 });
+  expect(deleteUsage).toHaveBeenCalledOnce();
+  expect(deleteUsage).toHaveBeenCalledWith("all", "subagent-unattributed", "unknown-subagent");
+});
+
 it("queues only allowlisted account commands behind the dashboard control check", async () => {
   const accountCommand = vi.fn(async (_command: string, _args: string) => {});
   const dashboard = new QuotaDashboard({

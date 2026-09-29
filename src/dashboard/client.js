@@ -621,7 +621,7 @@ function render() {
     table.append(caption);
     const head = document.createElement("thead");
     const header = document.createElement("tr");
-    for (const label of ["Provider", "Model", ...columns.map(([name]) => name), "估算费用 USD"]) {
+    for (const label of ["Provider", "Model", ...columns.map(([name]) => name), "估算费用 USD", "操作"]) {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;
@@ -638,6 +638,16 @@ function render() {
         cell.textContent = text;
         tr.append(cell);
       }
+      const actions = document.createElement("td");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "button-danger usage-delete";
+      remove.textContent = "删除记录";
+      remove.setAttribute("aria-label", `删除 ${item.provider} / ${item.model} 的本地用量记录`);
+      remove.disabled = busy || usage.stale;
+      remove.addEventListener("click", () => { void deleteUsageRow(item); });
+      actions.append(remove);
+      tr.append(actions);
       body.append(tr);
     }
     table.append(body);
@@ -754,6 +764,28 @@ function setBusy(value) {
   $("account-delete").disabled = value || !(latest?.profiles?.length) || $("account-manage-profile").value === latest?.currentProfile;
   $("account-reset-usage").disabled = value || !(latest?.profiles?.length);
   $("account-restore").disabled = value || !(latest?.backups?.length);
+  for (const button of document.querySelectorAll(".usage-delete")) button.disabled = value || !!latest?.usage?.stale;
+}
+async function deleteUsageRow(item) {
+  if (busy || !control || !latest || latest.usage.stale) return;
+  const account = latest.selectedAccountId;
+  if (!account) return;
+  const count = item.pricedRecords + item.unpricedRecords;
+  const scope = account === "all" ? "所有账本视图" : item.provider === "openai-codex" ? "此账号视图" : "所有账本视图（共享模型）";
+  if (!confirm(`先自动备份，再删除 ${scope}中 ${item.provider} / ${item.model} 的 ${count} 条现有本地记录？统计及趋势将同步扣除；不会影响 Provider 实际额度。`)) return;
+  setBusy(true);
+  $("feedback").textContent = "正在备份并删除记录…";
+  try {
+    const response = await fetch("/api/usage-delete", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Quota-Control": control },
+      body: JSON.stringify({ account, provider: item.provider, model: item.model }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "删除失败");
+    if (await load()) $("feedback").textContent = `已删除 ${result.removed} 条本地记录（删除前已备份）。`;
+  } catch (error) {
+    $("feedback").textContent = error.message || "删除失败";
+  } finally { setBusy(false); }
 }
 async function action(path, body) {
   if (busy || !control) return;

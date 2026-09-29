@@ -120,6 +120,7 @@
       <div class="panel breakdown-panel"><div class="subsection-heading"><h3>Token 构成</h3><span class="section-note">累计用量 · Reasoning 已包含在 Output 中</span></div><div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div></div>
       <div class="panel models-panel">
         <div class="subsection-heading"><h3>各模型明细</h3><span class="section-note">按累计 Tokens 排序</span></div>
+        <p class="hint model-delete-hint">可删除某一 Provider / Model 的现有本地记录（先自动备份）；账号视图只清除该账号的 Codex 记录，共享模型在所有视图一并清除。未来的新用量仍会记录。</p>
         <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 与估算费用明细，可横向滚动"></div>
         <details class="price-details disclosure"><summary>查看价格表与估算口径</summary><p class="hint">标准付费 API 文本 Token 标价（USD / 100 万 tokens），截至 <span id="price-date">—</span>。按每条账本记录分别计算后求和；超过模型阈值的请求使用高上下文价。Reasoning 计入 Output。Claude cache write 按 5 分钟价格估算；Gemini 缓存存储时长、音频/图像、工具费用及订阅折扣未计入。未匹配模型或无法定价的记录单独列为未计价，不当作零费用。新记录保留采集时的估算金额；未保存金额的旧记录按此版价格补估。</p><div id="price-table" class="table-scroll" tabindex="0" role="region" aria-label="公开 API 价格表，可横向滚动"></div></details>
       </div>

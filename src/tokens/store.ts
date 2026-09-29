@@ -5,6 +5,10 @@ import type { TokenTotals, TokenUsageRecord } from "../types.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { withLedgerLock } from "../history.js";
 import { ledgerDateMatches } from "./ledger-date.js";
+import { usageIdentity } from "./identity.js";
+import { isUsageDeleted } from "../history.js";
+
+export { usageIdentity } from "./identity.js";
 
 export function localDate(timestamp: number): string {
   const now = new Date(timestamp);
@@ -15,21 +19,12 @@ function ledgerPath(day: string): string {
   return join(usageDirectory(), `usage-${day}.jsonl`);
 }
 
-export function usageIdentity(record: TokenUsageRecord): string | undefined {
-  if (!record.sessionId) return undefined;
-  // The same assistant turn can arrive through an ambient message_end and a child session file.
-  // Aggregate-only CLI receipts have no message timestamp; runId is their stable identity.
-  return record.model === "unknown-subagent" && record.runId
-    ? JSON.stringify(["run", record.sessionId, record.runId])
-    : JSON.stringify(["turn", record.sessionId, record.timestamp, record.provider, record.model,
-      record.input, record.output, record.cacheRead, record.cacheWrite]);
-}
-
 export async function appendUsage(record: TokenUsageRecord): Promise<boolean> {
   return withLedgerLock(async () => {
     const path = ledgerPath(localDate(record.timestamp));
     const identity = usageIdentity(record);
     if (identity) {
+      if (await isUsageDeleted(identity)) return false;
       // Aggregate-only child receipts have no original timestamp. Their run ID
       // remains unique even if a long-lived session is reconciled weeks later.
       const paths = record.model === "unknown-subagent"

@@ -362,6 +362,48 @@ it("reports the active auth account name in the console without current.json", a
   } finally { await handlers.get("session_shutdown")?.({}, ctx); }
 });
 
+it("deletes a model row from the selected ledger without touching another Codex account", async () => {
+  const { dir } = await setup();
+  await saveAccount("pro");
+  const root = join(dir, "pi-quota-monitor");
+  const name = `usage-${localDate(Date.now())}.jsonl`;
+  const unknown = { ...record(), provider: "subagent-unattributed", model: "unknown-subagent", source: "pi-subagents" as const,
+    sessionId: "cli-run", runId: "cli-run" };
+  await writeFile(join(root, name), [record("pro-id"), record("plus-id"), unknown]
+    .map((item) => JSON.stringify(item) + "\n").join(""));
+  const handlers = new Map<string, (event: any, ctx: ExtensionContext) => unknown>();
+  const commands = new Map<string, (args: string, ctx: ExtensionContext) => Promise<void>>();
+  quotaMonitor({ on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, fn); return () => {}; },
+    registerCommand: (name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commands.set(name, options.handler); },
+  } as unknown as ExtensionAPI);
+  let url = "";
+  const ctx = { hasUI: true, mode: "rpc", ui: { setStatus() {}, notify: (message: string) => { url = message.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] ?? url; } },
+    sessionManager: { getBranch: () => [] }, getContextUsage: () => undefined,
+    modelRegistry: { getProvider: () => undefined, getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
+  } as unknown as ExtensionContext;
+  await handlers.get("session_start")?.({}, ctx);
+  try {
+    await commands.get("quota-console")?.("", ctx);
+    const initial = await (await fetch(`${url}/api/state?account=all`)).json() as { control: string; usage: { records: number; models: Array<{ provider: string; model: string }> } };
+    expect(initial.usage.records).toBe(3);
+    const headers = { Origin: url, "X-Quota-Control": initial.control, "Content-Type": "application/json" };
+    const remove = (account: string, provider: string, model: string) => fetch(`${url}/api/usage-delete`, {
+      method: "POST", headers, body: JSON.stringify({ account, provider, model }),
+    });
+    expect((await remove("account:not-listed", "openai-codex", "gpt-6-sol")).status).toBe(409);
+    expect((await remove("account:pro-id", "openai-codex", "not-in-view")).status).toBe(409);
+    const result = await remove("all", "subagent-unattributed", "unknown-subagent");
+    expect(await result.json()).toEqual({ ok: true, removed: 1 });
+    expect((await (await fetch(`${url}/api/state?account=all`)).json()).usage.models).not.toContainEqual(expect.objectContaining({ model: "unknown-subagent" }));
+    const scoped = await remove("account:pro-id", "openai-codex", "gpt-6-sol");
+    expect(await scoped.json()).toEqual({ ok: true, removed: 1 });
+    expect((await (await fetch(`${url}/api/state?account=all`)).json()).usage.records).toBe(1);
+    expect((await (await fetch(`${url}/api/state?account=account%3Apro-id`)).json()).usage.records).toBe(0);
+    expect((await readFile(join(root, "usage", name), "utf8"))).toContain("plus-id");
+    expect(await appendUsage(unknown)).toBe(false);
+  } finally { await handlers.get("session_shutdown")?.({}, ctx); }
+});
+
 it("keeps the console open and discovers an imported profile on the next state request", async () => {
   const { dir } = await setup();
   await saveAccount("pro");
