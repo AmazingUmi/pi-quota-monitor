@@ -1,7 +1,7 @@
 {
   "name": "pi-quota-monitor",
   "version": "0.3.2",
-  "description": "Real-time OpenAI Codex and Antigravity quota status for Pi",
+  "description": "Real-time OpenAI Codex, Claude, Antigravity, and Grok quota status for Pi",
   "author": "AmazingUmi",
   "license": "MIT",
   "type": "module",

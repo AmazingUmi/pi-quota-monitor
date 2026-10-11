@@ -18,14 +18,14 @@ const state: DashboardState = {
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
   quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, claude: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
   config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
-    showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true },
+    showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true },
   updatedAt: Date.now(),
 };
 
 it("serves a loopback-only, credential-free dashboard and closes on shutdown", async () => {
   const refresh = vi.fn(async () => {});
   const setInterval = vi.fn(async (seconds: number) => { state.config.refreshIntervalSeconds = seconds; });
-  const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar">>) => { Object.assign(state.config, settings); });
+  const setStatusbar = vi.fn(async (settings: Partial<Pick<typeof state.config, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar" | "showGrokInStatusbar">>) => { Object.assign(state.config, settings); });
   const dashboard = new QuotaDashboard({ state: () => state, refresh, setInterval, setStatusbar, setPort: async () => {} });
   running.push(dashboard);
   const origin = await dashboard.start(0);
@@ -59,7 +59,9 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("状态栏显示 OAI");
   expect(html).toContain("状态栏显示 AGY");
   expect(html).toContain("状态栏显示 CLA");
+  expect(html).toContain("状态栏显示 GRK");
   expect(html).toContain('id="claude-windows"');
+  expect(html).toContain('id="grok-windows"');
   for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
     "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
     "account-save-form", "account-import-form", "account-manage-profile", "account-delete",
@@ -127,8 +129,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(JSON.stringify(payload)).not.toContain("/usage-");
   expect(JSON.stringify(payload)).not.toContain("/secret/");
   expect(JSON.stringify(payload)).not.toContain("credential");
-  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar"]);
-  expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true });
+  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar", "showGrokInStatusbar"]);
+  expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true });
   expect(Object.keys(payload.usage)).toEqual(["totals", "models", "pricing", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
   const blocked = await fetch(`${origin}/api/refresh`, { method: "POST", headers: { Origin: "https://evil.example", "X-Quota-Control": payload.control } });
@@ -157,6 +159,8 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(setStatusbar).toHaveBeenCalledWith({ showOaiInStatusbar: false });
   expect((await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showClaudeInStatusbar: false }) })).status).toBe(200);
   expect(setStatusbar).toHaveBeenCalledWith({ showClaudeInStatusbar: false });
+  expect((await fetch(`${origin}/api/statusbar`, { method: "POST", headers, body: JSON.stringify({ showGrokInStatusbar: false }) })).status).toBe(200);
+  expect(setStatusbar).toHaveBeenCalledWith({ showGrokInStatusbar: false });
   const refreshed = await fetch(`${origin}/api/refresh`, { method: "POST", headers });
   expect(refreshed.status).toBe(200);
   expect(refresh).toHaveBeenCalledOnce();

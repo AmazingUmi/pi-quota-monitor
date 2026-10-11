@@ -44,9 +44,9 @@ it("formats finite numeric money as before and rejects non-numeric or non-finite
   expect(dom.window.eval("money(-1)")).toBe("$-1.0000");
 });
 
-it("shows three desktop quota cards with their own statusbar switches", async () => {
+it("shows desktop quota cards with their own statusbar switches", async () => {
   const { get } = await mount();
-  for (const [title, id] of [["codex-title", "show-oai"], ["claude-title", "show-claude"], ["agy-title", "show-agy"]]) {
+  for (const [title, id] of [["codex-title", "show-oai"], ["claude-title", "show-claude"], ["grok-title", "show-grok"], ["agy-title", "show-agy"]]) {
     const card = get(title).closest(".provider-card")!;
     const switchInput = get<HTMLInputElement>(id);
     expect(card.contains(switchInput)).toBe(true);
@@ -56,7 +56,7 @@ it("shows three desktop quota cards with their own statusbar switches", async ()
     expect(switchInput.checked).toBe(true);
     expect(get("settings").contains(switchInput)).toBe(false);
   }
-  expect(css).toMatch(/\.provider-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  expect(css).toMatch(/\.provider-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
   expect(css).toMatch(/\.switch-input:checked\s*\+\s*\.switch-track/);
   expect(css).toMatch(/\.switch-input:focus-visible\s*\+\s*\.switch-track/);
 });

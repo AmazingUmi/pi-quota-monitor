@@ -44,7 +44,7 @@
       <div class="section-heading"><div><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
-            <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。</p>
+            <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
             <p>开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
             <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算当期总金额与剩余金额；不会直接除以本周期全部已用额度。OAI 额度增加或重置时间明显变化时开始新一期，不假定每期固定为 5 小时或 7 天；起点只是首次观察时间。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
@@ -61,6 +61,11 @@
           <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><h3 id="claude-title">Claude</h3><details class="info-help provider-help"><summary aria-label="Claude 额度说明">?</summary><div class="help-content"><strong>Claude</strong><p id="claude-plan">等待额度数据</p><p id="claude-success">等待查询</p><div id="claude-error" aria-live="polite"></div></div></details></header>
           <div class="quota-groups"><section class="quota-group"><div id="claude-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
           <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 CLA</span></label></div>
+        </article>
+        <article class="provider-card panel" aria-labelledby="grok-title">
+          <header class="provider-heading"><span class="provider-icon grok-icon" aria-hidden="true">G</span><h3 id="grok-title">Grok</h3><details class="info-help provider-help"><summary aria-label="Grok 额度说明">?</summary><div class="help-content"><strong>Grok</strong><p id="grok-plan">等待额度数据</p><p id="grok-success">等待查询</p><div id="grok-error" aria-live="polite"></div></div></details></header>
+          <div class="quota-groups"><section class="quota-group"><div id="grok-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
+          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-grok" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 GRK</span></label></div>
         </article>
         <article class="provider-card panel" aria-labelledby="agy-title">
           <header class="provider-heading"><span class="provider-icon agy-icon" aria-hidden="true">A</span><h3 id="agy-title">Antigravity</h3><details class="info-help provider-help"><summary aria-label="Antigravity 额度说明">?</summary><div class="help-content"><strong>Antigravity</strong><p id="agy-plan">等待额度数据</p><p id="agy-success">等待查询</p><div id="agy-error" aria-live="polite"></div></div></details></header>
@@ -134,6 +139,7 @@
         <div class="provider-status-grid" aria-label="Provider 查询状态">
           <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div></article>
           <article class="provider-status"><h3>Claude</h3><div id="claude-query-status"></div></article>
+          <article class="provider-status"><h3>Grok</h3><div id="grok-query-status"></div></article>
           <article class="provider-status"><h3>Antigravity</h3><div id="agy-query-status"></div></article>
         </div>
         <form id="port-form" class="port-settings"><label for="dashboard-port">控制台端口（1024–65535，下次启动生效）</label>

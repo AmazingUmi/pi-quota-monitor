@@ -4,9 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 import { configDirectory } from "./config.js";
-import type { AntigravityQuota, ClaudeQuota, CodexQuota, QuotaWindow } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, GrokQuota, QuotaWindow } from "./types.js";
 
-interface Quotas { codex: CodexQuota; claude: ClaudeQuota; antigravity: AntigravityQuota }
+interface Quotas { codex: CodexQuota; claude: ClaudeQuota; antigravity: AntigravityQuota; grok: GrokQuota }
 const DAY = 86_400_000;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const text = (value: unknown): value is string => typeof value === "string" && value.length <= 512;
@@ -25,6 +25,10 @@ function clean<K extends keyof Quotas>(provider: K, value: unknown): Quotas[K] |
   if (!finite(v.capturedAt) || v.capturedAt <= 0) return;
   const base = { capturedAt: v.capturedAt, ...(text(v.plan) ? { plan: v.plan } : {}) };
   if (provider === "codex" || provider === "claude") return { ...base, fiveHour: windowValue(v.fiveHour), weekly: windowValue(v.weekly) } as Quotas[K];
+  if (provider === "grok") {
+    const credit = windowValue((v as GrokQuota).credit);
+    return credit ? { ...base, credit } as Quotas[K] : undefined;
+  }
   if (!Array.isArray(v.groups) || !Array.isArray(v.models)) return;
   return { ...base,
     groups: v.groups.slice(0, 100).flatMap((group) => group && text(group.name) && Array.isArray(group.windows)
@@ -50,7 +54,7 @@ async function readPrivate(path: string): Promise<string> {
 export class QuotaReadings<K extends keyof Quotas> {
   private readonly directory: string;
   constructor(private readonly provider: K, accountId?: string, root = configDirectory()) {
-    const scope = provider === "codex" || provider === "claude"
+    const scope = provider === "codex" || provider === "claude" || provider === "grok"
       ? createHash("sha256").update(accountId ?? "unassigned").digest("hex") : "shared";
     this.directory = join(root, "quota-readings", `${provider}-${scope}`);
   }

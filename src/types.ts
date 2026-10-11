@@ -18,6 +18,13 @@ export interface ClaudeQuota {
   weekly?: QuotaWindow;
 }
 
+/** SuperGrok shared credit pool. This is not a 5-hour window or an xAI API prepaid balance. */
+export interface GrokQuota {
+  capturedAt: number;
+  plan?: string;
+  credit?: QuotaWindow;
+}
+
 export interface AntigravityQuotaGroup {
   name: string;
   windows: QuotaWindow[];
@@ -110,4 +117,5 @@ export interface MonitorConfig {
   showOaiInStatusbar: boolean;
   showAgyInStatusbar: boolean;
   showClaudeInStatusbar: boolean;
+  showGrokInStatusbar: boolean;
 }

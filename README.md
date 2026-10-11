@@ -4,7 +4,7 @@
 
 ## 中文
 
-在 Pi 状态栏、`/quota` 和本机控制台查看 OpenAI Codex / Claude / Antigravity 额度与本地 Token 用量。
+在 Pi 状态栏、`/quota` 和本机控制台查看 OpenAI Codex / Claude / Antigravity / Grok 额度与本地 Token 用量。
 
 ### 安装
 
@@ -33,7 +33,7 @@ pi install npm:pi-quota-monitor
 
 ### 显示与估算
 
-- 状态栏 OAI / CLA / AGY 显示 **5 小时 / 每周剩余额度**；未知值为 `-`。控制台的三个额度卡片底部可分别选择是否在 pi-web 状态栏显示对应额度片段（TUI 保持显示）。启用倒计时后，OAI 的 `↻` 对 Pro 使用每周窗口，其他套餐使用 5 小时窗口。
+- 状态栏 OAI / CLA / AGY 显示 **5 小时 / 每周剩余额度**；GRK 显示 SuperGrok **共享额度剩余**（不是 5 小时窗口，也不是 xAI API 预付费余额）；未知值为 `-`。控制台额度卡片底部可分别选择是否在 pi-web 状态栏显示对应额度片段（TUI 保持显示）。启用倒计时后，OAI 的 `↻` 对 Pro 使用每周窗口，其他套餐使用 5 小时窗口，GRK 使用共享额度重置时间。
 - 控制台默认地址：`http://127.0.0.1:38457`，仅监听本机。远程查看可使用 SSH 端口转发；不要将端口暴露到局域网。
 - OAI 额度卡片显示账号剩余额度；逐期趋势按 Codex 账号分别记录 5 小时和每周窗口。Claude 卡片只显示 Pi 当前 Anthropic OAuth 账号的额度，与 Codex 账本视图无关；5 小时/每周金额按相邻读数与可归属的 Pi Token 使用同一**条件估算**算法。额度增加或重置时间明显变化时开启新一期。
 - 账号额度下降包含其他 Pi 进程、Codex CLI 等客户端，**不能直接归因于本 Pi**。同一周期内逐对比较相邻读数和对应时间戳的 Pi Token：仅额度下降、无本地 Token 的区间排除；**累计所有可用区间的 Pi 金额与对应额度下降**后提供明确标注的**条件估算**，并不证明全部额度下降由 Pi 造成。混合外部用量仍可能使结果偏差；无可计价记录、读数不足或账本不完整时显示 `—`。旧版未经标注的金额以及未考虑周额度延迟下降的旧周估算会在更新时移除。周额度若连续读数不变，会将其间 Pi Token 暂存并在下一次额度下降时合并校准；最近一次下降后尚未匹配的 Token 不计入分母。两次查询之间的重置只能在下一次读数时发现。
@@ -43,7 +43,7 @@ pi install npm:pi-quota-monitor
 
 ### 账号与本地数据
 
-- 使用 Pi 的 `/login` 登录 Codex 后，可保存或切换账号。使用 Pi 的 `/login anthropic` 登录 Claude Pro/Max；本插件暂不管理 Claude 多账号，Anthropic API Key 不具备订阅额度。Claude OAuth 额度与账号资料接口并非 Anthropic 公开稳定 API，可能失效；资料无法确认时不保存跨账号读数或估算金额，未归属及其他账号的 Token 不参与校准。凭据由 Pi 刷新，本插件不另存 OAuth token。切换会验证凭据并在失败时回滚；同一 Pi 数据目录的其他进程也会读取共享的 `auth.json`，请勿在其请求期间切换。
+- 使用 Pi 的 `/login` 登录 Codex 后，可保存或切换账号。使用 Pi 的 `/login anthropic` 登录 Claude Pro/Max；本插件暂不管理 Claude 多账号，Anthropic API Key 不具备订阅额度。Claude OAuth 额度与账号资料接口并非 Anthropic 公开稳定 API，可能失效；资料无法确认时不保存跨账号读数或估算金额，未归属及其他账号的 Token 不参与校准。Grok 使用 Pi 的 `/login xai`（设备码 OAuth），查询 `cli-chat-proxy.grok.com` 的共享额度；该接口并非公开稳定 API，可能失效。xAI API Key 和管理密钥不会被发送到该接口，也不代表 SuperGrok 剩余额度。身份无法确认时不保存跨账号读数。凭据由 Pi 刷新，本插件不另存 OAuth token。切换会验证凭据并在失败时回滚；同一 Pi 数据目录的其他进程也会读取共享的 `auth.json`，请勿在其请求期间切换。
 - 只有当前登录账号可查询 Codex 实时额度；已记录的逐期估算可按历史账号查看。Antigravity 用量在账号视图间共享。
 - Token 账本位于 `pi-quota-monitor/usage/`：主 Agent 的 `message_end` 与可用的 pi-subagents cost RPC 合并；按 child session 的模型消息去重，无法读取会话的 CLI child 按 runId 记录为未计价用量，不猜测其模型。无法可靠确定 child 使用的 Codex 账号时，该 child 仅在「总体用量」中显示；缺失的运行元数据、子会话不可读或未加载 pi-subagents 时本地汇总仍是下界；不保存提示词或凭据。Reasoning 已计入 Output，不重复累计。
 - 控制台「各模型明细」可按 Provider / Model 删除**现有本地账本记录**，删除前自动备份；账号视图只删除该账号的 Codex 记录，其他 Provider 在视图间共享。总量、趋势及金额随之变化；若删除 Codex 记录，相关账号的历史周期估算会作废（当期可在有足够样本时重新估算）。服务商实际额度不受影响；未来的新用量仍会写入，已删除的可识别 subagent 运行不会因重复同步而重现。恢复旧备份可能重新导入已删除的记录。
@@ -63,7 +63,7 @@ Pi 画廊以**已公开发布的 npm 版本**为准：`pi-package` 关键字使�
 
 ## English
 
-View OpenAI Codex / Claude / Antigravity quotas and local token usage in Pi's status bar, `/quota`, and a local dashboard.
+View OpenAI Codex / Claude / Antigravity / Grok quotas and local token usage in Pi's status bar, `/quota`, and a local dashboard.
 
 ### Install
 
@@ -92,9 +92,9 @@ Other account commands: `/quota-account-current`, `/quota-account-backup`, `/quo
 
 ### Display and estimates
 
-- OAI / CLA / AGY status-bar values are **5-hour / weekly remaining quota**; unknown values show `-`. When countdowns are enabled, OAI's `↻` uses the weekly window for Pro and the 5-hour window for other plans.
+- OAI / CLA / AGY status-bar values are **5-hour / weekly remaining quota**. GRK is the SuperGrok **shared credit remaining**, not a 5-hour window and not an xAI API prepaid balance. Unknown values show `-`. When countdowns are enabled, OAI's `↻` uses the weekly window for Pro and the 5-hour window for other plans; GRK uses the shared-credit reset.
 - The dashboard defaults to `http://127.0.0.1:38457` and listens on loopback only. Use SSH forwarding for remote access; do not expose it to the LAN.
-- Claude quota and conditional amount estimates use Pi's current Anthropic Pro/Max OAuth login (`/login anthropic`) and only account-attributed Pi usage. Anthropic OAuth usage/profile endpoints are undocumented and can change; when identity is unavailable, amounts are withheld. API-key usage is not a subscription quota. The dashboard has independent pi-web OAI/CLA/AGY status-bar switches; TUI keeps the provider segments.
+- Claude quota and conditional amount estimates use Pi's current Anthropic Pro/Max OAuth login (`/login anthropic`) and only account-attributed Pi usage. Anthropic OAuth usage/profile endpoints are undocumented and can change; when identity is unavailable, amounts are withheld. API-key usage is not a subscription quota. Grok quota uses Pi's xAI device-code OAuth (`/login xai`) against the undocumented Grok CLI billing host. Inference and management keys are not sent there and do not represent SuperGrok remaining credit. Readings are not stored across accounts when identity cannot be confirmed. The dashboard has independent pi-web OAI/CLA/AGY/GRK status-bar switches; TUI keeps the provider segments.
 - OAI cards show account remaining quota. The collapsible period chart tracks 5-hour and weekly windows per Codex account; an observed increase or substantial reset-time change starts a new period.
 - Account quota drops include Codex CLI, other Pi processes and other clients; they **cannot be directly attributed to this Pi**. Adjacent readings are matched to timestamped local Pi usage. Intervals with a quota drop but no local tokens are excluded; costs and quota drops are summed across all eligible intervals to produce a clearly labeled **conditional estimate**, not proof that Pi caused the whole drop. Concurrent external usage can still skew it. Unpriced/incomplete ledgers or insufficient samples show `—`; unlabeled legacy quotes and older weekly quotes that ignored quota plateaus are removed on update. For a weekly quota plateau, local tokens are paired with the next observed decline; tokens after the latest decline remain pending rather than being charged to an earlier denominator. Resets between queries are detected only at the next observation.
 - Local Token amounts use public API list prices, **not subscription charges, balances, or provider limits**. The catalogue (checked 2026-09-25) covers exact mainstream model IDs from [DeepSeek](https://api-docs.deepseek.com/quick_start/pricing/), [OpenAI](https://platform.openai.com/docs/pricing), [Gemini API](https://ai.google.dev/gemini-api/docs/pricing), and [Claude API](https://platform.claude.com/docs/en/about-claude/pricing). `openai-codex` and `antigravity` use corresponding API list prices, not OAuth subscription bills. See [`src/tokens/pricing.ts`](src/tokens/pricing.ts) for models and sources.

@@ -253,6 +253,23 @@ function renderClaude(cache) {
   $("claude-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
   renderProviderErrors($("claude-error"), cache);
 }
+function grokWindowLabel(window) {
+  if (window?.label === "weekly") return "Weekly Credit Remaining";
+  if (window?.label === "monthly") return "Monthly Credit Remaining";
+  return "Credit Remaining";
+}
+function renderGrok(cache) {
+  const result = cache?.value;
+  $("grok-plan").textContent = result
+    ? `Pi 当前 xAI OAuth${result.plan ? ` · ${result.plan}` : ""} · 共享额度，非 API 余额`
+    : "等待 Pi 的 xAI OAuth 额度数据";
+  const windows = $("grok-windows");
+  updateQuotaContent(windows, [result], "grok", () => {
+    quotaWindow(windows, grokWindowLabel(result?.credit), result?.credit);
+  });
+  $("grok-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  renderProviderErrors($("grok-error"), cache);
+}
 function modelGroupName(model) {
   const name = `${model.modelId} ${model.displayName ?? ""}`;
   if (/gemini/i.test(name)) return "Gemini 模型额度（旧版回退）";
@@ -649,6 +666,7 @@ function render() {
   const agy = latest.antigravity;
   renderCodex(codex);
   renderClaude(latest.claude ?? {});
+  renderGrok(latest.grok ?? {});
   renderAntigravity(agy);
   renderCodexPeriodChart();
   const codexStatus = $("codex-query-status");
@@ -658,6 +676,9 @@ function render() {
   const claudeStatus = $("claude-query-status");
   claudeStatus.replaceChildren();
   statusDetails(claudeStatus, latest.claude ?? {});
+  const grokStatus = $("grok-query-status");
+  grokStatus.replaceChildren();
+  statusDetails(grokStatus, latest.grok ?? {});
   const agyStatus = $("agy-query-status");
   agyStatus.replaceChildren();
   statusDetails(agyStatus, agy, [agy.value?.summaryError]);
@@ -755,6 +776,7 @@ function render() {
     $("show-oai").checked = latest.config.showOaiInStatusbar;
     $("show-claude").checked = latest.config.showClaudeInStatusbar;
     $("show-agy").checked = latest.config.showAgyInStatusbar;
+    $("show-grok").checked = latest.config.showGrokInStatusbar !== false;
   }
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }
@@ -846,10 +868,11 @@ function syncStatusbarControls() {
   $("show-oai").checked = latest.config.showOaiInStatusbar;
   $("show-claude").checked = latest.config.showClaudeInStatusbar;
   $("show-agy").checked = latest.config.showAgyInStatusbar;
+  $("show-grok").checked = latest.config.showGrokInStatusbar !== false;
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-claude", "show-agy", "account-add", "account-history",
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-claude", "show-agy", "show-grok", "account-add", "account-history",
     "account-name", "account-import-name", "account-import-path", "backup-location", "backup-directory", "backup-restore-path",
     "account-backup-create", "account-restore-path", "dashboard-port", "port-check", "port-submit", "port-use-current"]) $(id).disabled = value;
   $("refresh").textContent = value ? "处理中…" : "↻ 刷新额度";
@@ -1070,6 +1093,9 @@ $("show-claude").addEventListener("change", (event) => {
 });
 $("show-agy").addEventListener("change", (event) => {
   void action("/api/statusbar", { showAgyInStatusbar: event.currentTarget.checked });
+});
+$("show-grok").addEventListener("change", (event) => {
+  void action("/api/statusbar", { showGrokInStatusbar: event.currentTarget.checked });
 });
 if (typeof ResizeObserver !== "undefined") {
   let chartWidth;

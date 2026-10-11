@@ -237,6 +237,7 @@ it("defaults missing statusbar options on for old configs and validates explicit
   expect(normalizeConfig({}).showOaiInStatusbar).toBe(true);
   expect(normalizeConfig({}).showAgyInStatusbar).toBe(true);
   expect(normalizeConfig({}).showClaudeInStatusbar).toBe(true);
+  expect(normalizeConfig({}).showGrokInStatusbar).toBe(true);
   expect(normalizeConfig({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: "false" })).toMatchObject({
     showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: true,
   });

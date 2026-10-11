@@ -1,4 +1,4 @@
-import type { AntigravityQuota, ClaudeQuota, CodexQuota, ProviderCache, QuotaWindow, TokenTotals } from "./types.js";
+import type { AntigravityQuota, ClaudeQuota, CodexQuota, GrokQuota, ProviderCache, QuotaWindow, TokenTotals } from "./types.js";
 
 export function compactTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`;
@@ -43,8 +43,9 @@ export function formatStatus(
   totals: TokenTotals,
   showReset: boolean,
   now = Date.now(),
-  visibility: { showOai?: boolean; showAgy?: boolean; showClaude?: boolean } = {},
+  visibility: { showOai?: boolean; showAgy?: boolean; showClaude?: boolean; showGrok?: boolean } = {},
   claude?: ProviderCache<ClaudeQuota>,
+  grok?: ProviderCache<GrokQuota>,
 ): string {
   const geminiFiveHour = geminiTimedWindow(antigravity.value, "fiveHour");
   const geminiWeekly = geminiTimedWindow(antigravity.value, "weekly");
@@ -68,6 +69,10 @@ export function formatStatus(
   if (visibility.showAgy !== false) {
     parts.push(`AGY ${percentage(geminiFiveHour?.remainingPercent, "-")}/${percentage(geminiWeekly?.remainingPercent, "-")}${geminiReset ? ` ↻${geminiReset}` : ""}`);
   }
+  if (grok && visibility.showGrok !== false) {
+    const reset = showReset ? countdown(grok.value?.credit?.resetAt, now) : undefined;
+    parts.push(`GRK ${percentage(grok.value?.credit?.remainingPercent, "-")}${reset ? ` ↻${reset}` : ""}`);
+  }
   parts.push(`↑${compactTokens(totals.input)} ↓${compactTokens(totals.output)}`);
   return parts.join(" | ");
 }
@@ -84,6 +89,7 @@ export function formatDetails(
   daily: TokenTotals,
   interval: number,
   claude?: ProviderCache<ClaudeQuota>,
+  grok?: ProviderCache<GrokQuota>,
 ): string {
   const codexResult = codex.value;
   const agy = antigravity.value;
@@ -91,6 +97,7 @@ export function formatDetails(
     `Quota monitor · refresh every ${interval}s`,
     `Codex${codexResult?.plan ? ` (${codexResult.plan})` : ""}: 5h ${codexResult?.plan?.toLowerCase() === "pro" && !codexResult.fiveHour ? "not applicable" : formatWindow(codexResult?.fiveHour)}; weekly ${formatWindow(codexResult?.weekly)}`,
     ...(claude ? [`Claude: 5h ${formatWindow(claude.value?.fiveHour)}; weekly ${formatWindow(claude.value?.weekly)}`] : []),
+    ...(grok ? [`Grok${grok.value?.plan ? ` (${grok.value.plan})` : ""}: ${grok.value?.credit?.label ?? "credits"} ${formatWindow(grok.value?.credit)}`] : []),
     `Antigravity${agy?.plan ? ` (${agy.plan})` : ""}: Gemini ${formatWindow(groupWindow(agy, "gemini"))}; Claude/GPT ${formatWindow(groupWindow(agy, "shared"))}`,
     `Session: input ${session.input}, output ${session.output}, reasoning ${session.reasoning}, cacheRead ${session.cacheRead}, cacheWrite ${session.cacheWrite}, total ${session.totalTokens}`,
     `Today: input ${daily.input}, output ${daily.output}, reasoning ${daily.reasoning}, cacheRead ${daily.cacheRead}, cacheWrite ${daily.cacheWrite}, total ${daily.totalTokens}`,
@@ -98,6 +105,8 @@ export function formatDetails(
   if (codexResult) lines.push(`Codex updated ${new Date(codexResult.capturedAt).toLocaleString()}`);
   if (claude?.value) lines.push(`Claude updated ${new Date(claude.value.capturedAt).toLocaleString()}`);
   if (claude?.error) lines.push(`Claude: ${claude.error}${claude.value ? " (showing last successful result)" : ""}`);
+  if (grok?.value) lines.push(`Grok updated ${new Date(grok.value.capturedAt).toLocaleString()}`);
+  if (grok?.error) lines.push(`Grok: ${grok.error}${grok.value ? " (showing last successful result)" : ""}`);
   if (agy) lines.push(`Antigravity updated ${new Date(agy.capturedAt).toLocaleString()}`);
   if (codex.error) lines.push(`Codex: ${codex.error}${codexResult ? " (showing last successful result)" : ""}`);
   if (antigravity.error) lines.push(`Antigravity: ${antigravity.error}${agy ? " (showing last successful result)" : ""}`);

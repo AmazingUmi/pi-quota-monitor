@@ -208,11 +208,11 @@ it("keeps selected RPC status visible in the console and applies settings withou
   const { queryCodexQuota } = await import("../src/providers/codex.js");
   const callsBeforeRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
   const saved = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
-    body: JSON.stringify({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false }) });
+    body: JSON.stringify({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false, showGrokInStatusbar: false }) });
   expect(saved.status).toBe(200);
   expect(statuses.at(-1)).toEqual({ key: "pi-quota-monitor", text: "↑0 ↓0" });
   const refreshedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
-  expect(refreshedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false });
+  expect(refreshedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false, showGrokInStatusbar: false });
   const refreshResponse = await fetch(`${url}/api/refresh`, { method: "POST", headers });
   expect(refreshResponse.status).toBe(200);
   expect(vi.mocked(queryCodexQuota).mock.calls.length).toBeGreaterThan(callsBeforeRefresh);
@@ -237,7 +237,7 @@ it("keeps selected RPC status visible in the console and applies settings withou
     body: JSON.stringify({ showOaiInStatusbar: true }) });
   expect(failedSave.status).toBe(500);
   const failedState = await (await fetch(`${url}/api/state`)).json() as { config: Record<string, unknown> };
-  expect(failedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false });
+  expect(failedState.config).toMatchObject({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false, showGrokInStatusbar: false });
   expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | CLA -/- | AGY 84%/67%");
   await fire("session_shutdown");
   cleanup.pop();
