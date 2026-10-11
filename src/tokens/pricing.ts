@@ -3,7 +3,7 @@ import type { TokenUsageRecord } from "../types.js";
 /** USD per million tokens, public global on-demand/effective rates, checked 2026-09-25. */
 export interface Rates { input: number; output: number; cacheRead: number; cacheWrite?: number }
 export interface PriceRow {
-  provider: "openai-codex" | "openai" | "antigravity" | "google" | "google-vertex" | "anthropic" | "deepseek";
+  provider: "openai-codex" | "openai" | "antigravity" | "google" | "google-vertex" | "anthropic" | "deepseek" | "xai";
   model: string;
   rates: Rates;
   source: string;
@@ -19,6 +19,7 @@ const GEMINI = "https://ai.google.dev/gemini-api/docs/pricing";
 const VERTEX = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing";
 const CLAUDE = "https://platform.claude.com/docs/en/about-claude/pricing";
 const DEEPSEEK = "https://api-docs.deepseek.com/quick_start/pricing/";
+const XAI = "https://docs.x.ai/developers/pricing";
 const openai = (model: string, input: number, output: number, cacheRead: number, cacheWrite?: number): PriceRow[] =>
   (["openai-codex", "openai"] as const).map((provider) => ({
     provider, model, rates: { input, output, cacheRead, ...(cacheWrite === undefined ? {} : { cacheWrite }) },
@@ -38,6 +39,12 @@ const claude = (model: string, input: number, output: number, cacheRead: number,
   (["antigravity", "anthropic"] as const).map((provider) => ({
     provider, model, rates: { input, output, cacheRead, cacheWrite }, source: CLAUDE,
   }));
+const grok = (model: string, input: number, output: number, cacheRead: number, long: [number, number, number]): PriceRow => ({
+  provider: "xai", model, source: XAI,
+  // xAI has no separate cache-write price. A zero rate keeps a reported write from leaving the whole record unpriced.
+  rates: { input, output, cacheRead, cacheWrite: 0 },
+  longContext: { threshold: 200_000, rates: { input: long[0], output: long[1], cacheRead: long[2], cacheWrite: 0 } },
+});
 const deepseek = (model: string, input: number, output: number, cacheRead: number): PriceRow => ({
   provider: "deepseek", model, source: DEEPSEEK,
   // Cache creation is an input cache miss, not a separately charged cache-write operation.
@@ -87,6 +94,11 @@ export const PRICE_TABLE: readonly PriceRow[] = [
   ...claude("claude-haiku-4-5", 1, 5, 0.1, 1.25),
   deepseek("deepseek-flash", 0.15, 0.6, 0.003),
   deepseek("deepseek-v4-pro", 0.66, 1.98, 0.022),
+  // Global on-demand rates. The US regional endpoint's 10% premium is not inferred.
+  grok("grok-4.7", 2, 6, 0.5, [4, 12, 1]),
+  grok("grok-4.6", 2, 6, 0.5, [4, 12, 1]),
+  grok("grok-4.5", 2, 6, 0.3, [4, 12, 0.6]),
+  grok("grok-4.3", 1.25, 2.5, 0.2, [2.5, 5, 0.4]),
 ];
 
 function priceFor(provider: string, model: string, timestamp: number): PriceRow | undefined {
@@ -124,11 +136,12 @@ function deepseekIsPeak(timestamp: number): boolean {
 export function estimateRecordCost(record: TokenUsageRecord): number | undefined {
   // New ledger entries retain their recorded amount even when the catalog later changes.
   if (record.estimatedCostUsd !== undefined) return Number.isFinite(record.estimatedCostUsd) && record.estimatedCostUsd >= 0 ? record.estimatedCostUsd : undefined;
-  // Preserve previously collected unknown models. Backfill only verified 3.8 Flash
-  // IDs; older google-vertex records could not be priced before this addition.
-  if (record.pricingAsOf !== undefined && !(record.provider === "antigravity" &&
-    /^gemini-3\.8-flash(?:-(?:low|medium|high))?$/i.test(record.model))
-    && !(record.provider === "google-vertex" && /^gemini-3\.8-flash$/i.test(record.model))) return undefined;
+  // Preserve previously collected unknown models. Backfill only IDs whose
+  // prices were added after those records were written without a cost.
+  const backfill = (record.provider === "antigravity" && /^gemini-3\.8-flash(?:-(?:low|medium|high))?$/i.test(record.model))
+    || (record.provider === "google-vertex" && /^gemini-3\.8-flash$/i.test(record.model))
+    || record.provider === "xai";
+  if (record.pricingAsOf !== undefined && !backfill) return undefined;
   if (!Number.isFinite(record.timestamp)) return undefined;
   const price = priceFor(record.provider, record.model, record.timestamp);
   if (!price) return undefined;

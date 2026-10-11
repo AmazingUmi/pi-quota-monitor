@@ -49,9 +49,10 @@
         unit: w.querySelector(".quota-unit")?.textContent ?? "", known: !!m && !m.hidden, v: m ? m.value : 0, level: m?.dataset.level ?? "normal",
         reset: w.querySelector("small.subtle"), help: w.querySelector("details.quota-money"), extras: [...w.children].filter((c) => c.matches(".quota-money-values,.quota-estimate-value")) };
     });
-    const svg = sv("svg", { class: "gauge-ring", viewBox: "0 0 136 136", role: "img",
+    const svg = sv("svg", { class: "gauge-ring", viewBox: "0 0 136 136", width: "112", height: "112", role: "img",
       "aria-label": info.slice(0, 2).map((i) => `${i.label}：${i.known ? `${i.num} ${i.unit}` : i.unit}`).join("；") });
-    [56, 41].slice(0, info.length).forEach((r, i) => {
+    // Always use the same outer radius so a one-window card matches a two-window card.
+    [56, 41].slice(0, Math.min(info.length, 2)).forEach((r, i) => {
       svg.append(sv("circle", { cx: 68, cy: 68, r, class: "gauge-track" }));
       if (info[i].known && info[i].v > 0) {
         const c = 2 * Math.PI * r;
@@ -59,9 +60,6 @@
           "stroke-dasharray": `${(c * Math.max(info[i].v, 0.5)) / 100} ${c}`, transform: "rotate(-90 68 68)" }));
       }
     });
-    const center = sv("text", { x: 68, y: 75, "text-anchor": "middle", class: "gauge-num" });
-    center.textContent = info[0].known ? info[0].num : "—";
-    svg.append(center);
     const legend = el("div", "gauge-legend");
     info.forEach((i, idx) => {
       const row = el("div", "gauge-row");
@@ -115,7 +113,7 @@
     select.after(group);
     sync();
   }
-  for (const id of ["chart-view", "chart-period", "codex-period-kind", "model-comparison-metric", "model-comparison-period"]) segment(document.getElementById(id));
+  for (const id of ["chart-view", "chart-period", "model-comparison-metric", "model-comparison-period"]) segment(document.getElementById(id));
 
   // 4. One trend chart at a time: Token or cost.
   const grid = document.querySelector(".trend-grid"), controls = document.querySelector(".usage-panel .chart-controls");

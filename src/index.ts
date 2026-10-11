@@ -6,7 +6,6 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import type { QuotaDashboard } from "./dashboard.js";
 import { attachDashboard, detachDashboard } from "./resident-dashboard.js";
 import { QuotaReadings } from "./quota-readings.js";
-import { CodexPeriodStore } from "./codex-periods.js";
 import { queryAntigravityQuota, queryNativeAntigravityQuota } from "./providers/antigravity.js";
 import { queryCodexQuota } from "./providers/codex.js";
 import { queryClaudeQuota } from "./providers/claude.js";
@@ -192,16 +191,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
     if (!codex.value && readings.length) { codex.value = readings.at(-1); codex.restored = true; }
   }
 
-  async function syncCodexPeriods(account: string, view?: UsageAggregator): Promise<void> {
-    if (codexAccountId !== account || activeAccountId() !== account || !codex.value) return;
-    const usage = view ?? new UsageAggregator(undefined, account);
-    await ledgerQueue;
-    await usage.refresh();
-    if (codexAccountId !== account || activeAccountId() !== account) return;
-    const estimates = quotaAmountEstimates(usage, codex, {}, codexHistory, []).codex;
-    await new CodexPeriodStore(account).update(codexHistory, estimates);
-  }
-
   function persistReading(write: () => Promise<void>, cache: ProviderCache<unknown>, epoch: number): Promise<void> {
     cache.storageError = undefined;
     const value = cache.value;
@@ -256,11 +245,7 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           codex.error = undefined;
           codex.restored = false;
           codexHistory = [...codexHistory.filter((q) => q.capturedAt > Date.now() - 8 * 86_400_000), result];
-          if (account) {
-            await persistReading(() => new QuotaReadings("codex", account).append(result), codex, epoch);
-            try { await syncCodexPeriods(account, views.get(`account:${account}`)); }
-            catch { if (live(epoch) && codexAccountId === account) codex.storageError = "周期估算记录保存失败；当前额度读数仍可用。"; }
-          }
+          if (account) await persistReading(() => new QuotaReadings("codex", account).append(result), codex, epoch);
         } else if (provider === "anthropic") {
           if (!revision) throw new Error("Claude OAuth credential unavailable.");
           const configured = ctx.modelRegistry.getProvider(provider);
@@ -617,18 +602,9 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
             syncClaudeCredential();
             syncGrokCredential();
             const quotaEstimates = quotaAmountEstimates(view, visibleCodex, antigravity, codexHistory, agyHistory, claude, claudeHistory, claudeAccountId);
-            let codexPeriods = [] as Awaited<ReturnType<CodexPeriodStore["load"]>>;
-            try {
-              codexPeriods = selected === "all" ? [] : showingCurrent && currentId && codexAccountId === currentId
-                ? await new CodexPeriodStore(currentId).update(codexHistory, quotaEstimates.codex)
-                : await new CodexPeriodStore(selected.slice("account:".length)).load();
-            } catch {
-              if (showingCurrent) codex.storageError = "周期估算记录读取失败；当前额度读数仍可用。";
-            }
             const backups = await listBackups();
             if (!live(epoch)) throw new Error("Session is no longer active.");
             return { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId: selected,
-              codexPeriods,
               currentAccountId: currentId ? `account:${currentId}` : undefined, codex: visibleCodex,
               claude, grok, antigravity, usage: { ...view.state(), childUsageIncomplete }, context: currentContext ? contextMetrics(currentContext) : null,
               quotaEstimates, config, updatedAt: Date.now() };
@@ -653,14 +629,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
               throw new Error("Model no longer appears in the selected ledger.");
             }
             const result = await deleteModelUsage(provider, model, account === "all" ? undefined : account.slice("account:".length));
-            if (result.removed && provider === "openai-codex") {
-              const affected = new Set(result.codexAccountIds);
-              if (result.unassignedCodex) for (const item of accounts) {
-                if (item.id.startsWith("account:")) affected.add(item.id.slice("account:".length));
-              }
-              try { await Promise.all([...affected].map((id) => new CodexPeriodStore(id).invalidateEstimates())); }
-              catch { codex.storageError = "周期估算记录失效处理失败；请检查本地周期文件。"; }
-            }
             dailyDate = "";
             await updateDailyDate(epoch);
             await Promise.all(accountAggregators.map((item) => item.refresh()));
@@ -818,8 +786,6 @@ export default function quotaMonitor(pi: ExtensionAPI): void {
           if (!ctx.hasUI) throw new Error("Reset requires an interactive confirmation.");
           if (!await ctx.ui.confirm("清除本地用量", `清除 ${extra} 的本地 Codex 用量？将先备份，不能重置 OpenAI 实际额度。`)) return;
           const result = await resetAccountUsage(profile.accountId);
-          try { await new CodexPeriodStore(profile.accountId).invalidateEstimates(); }
-          catch { codex.storageError = "周期估算记录失效处理失败；请检查本地周期文件。"; }
           dailyDate = "";
           await updateDailyDate(generation);
           await Promise.all(accountAggregators.map((view) => view.refresh()));

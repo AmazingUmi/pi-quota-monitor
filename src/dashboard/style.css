@@ -320,13 +320,12 @@ h1{font-size:clamp(28px,3vw,34px);font-weight:700}
 .glass-scale{display:flex;justify-content:space-between;color:var(--muted);font-size:12px}
 /* ===== Concentric gauge ===== */
 .quota-windows:has(>.gauge){display:block}
-.gauge{display:flex;align-items:center;gap:22px}
-.gauge-ring{flex:0 0 136px;width:136px;height:136px}
+.gauge{display:flex;align-items:flex-start;gap:22px}
+.gauge-ring{flex:0 0 112px;width:112px;height:112px;min-width:112px;min-height:112px;max-height:112px}
 .gauge-track,.gauge-value{fill:none;stroke-width:12}
 .gauge-track{stroke:color-mix(in srgb,var(--pc) 20%,transparent)}
 .gauge-value{stroke:var(--pc);stroke-linecap:round}
 .gauge-value[data-level=warning]{stroke:var(--warning)}.gauge-value[data-level=low]{stroke:var(--danger)}
-.gauge-num{font-size:24px;font-weight:650;fill:var(--text);font-variant-numeric:tabular-nums}
 .gauge-legend{display:flex;flex-direction:column;gap:14px;min-width:0;color:var(--muted);font-size:13px}
 .gauge-head{display:flex;align-items:center;gap:6px}
 .gauge-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--pc)}
@@ -378,10 +377,11 @@ h1{font-size:clamp(28px,3vw,34px);font-weight:700}
 .provider-heading{align-items:center;margin-bottom:16px}
 .provider-heading .hint{min-height:0;margin:0;font-size:12px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .provider-icon{border-radius:10px}
-.provider-card:has(#codex-windows) .quota-group>h4,.provider-card:has(#claude-windows) .quota-group>h4,.provider-card:has(#grok-windows) .quota-group>h4{display:none}
+.provider-card:has(#codex-windows) .quota-group>h4,.provider-card:has(#claude-windows) .quota-group>h4,.provider-card:has(#grok-windows) .quota-group>h4,#agy-windows>.quota-group:first-child>h4{display:none}
 .provider-card>.quota-windows,.provider-card>.quota-groups{margin-bottom:0}
-.gauge{gap:16px;margin-bottom:14px}
-.gauge-ring{flex:0 0 112px;width:112px;height:112px}
+.provider-card .provider-heading{min-height:40px}
+.gauge{gap:16px;margin-bottom:14px;align-items:flex-start;min-height:112px}
+.provider-grid .gauge-ring{flex:0 0 112px;width:112px;height:112px;min-width:112px;min-height:112px;max-height:112px}
 .gauge-legend{gap:12px}
 .gauge-val{font-size:19px}
 .gauge-row .quota-money-values{display:flex;gap:16px;margin:5px 0 0;padding:0;border:0;background:none;box-shadow:none}
@@ -433,7 +433,7 @@ h1{font-size:clamp(28px,3vw,34px);font-weight:700}
 .provider-card .info-help{position:static}
 .provider-card .help-content{top:auto;left:16px;right:16px;width:auto;margin-top:8px}
 .provider-help[data-state=warning]>summary{color:var(--warning);border-color:color-mix(in srgb,var(--warning) 40%,transparent)}
-.gauge{gap:20px;align-items:center;margin-bottom:20px}
+.gauge{gap:20px;align-items:flex-start;margin-bottom:20px}
 .gauge-legend{flex:1;gap:18px}
 .gauge-head{gap:6px;font-size:12px}.gauge-head .info-help{margin:0 0 0 auto}
 .gauge-head .info-help>summary{width:20px;height:20px}
@@ -457,8 +457,8 @@ h1{font-size:clamp(28px,3vw,34px);font-weight:700}
 .usage-delete:hover{color:var(--danger);background:var(--danger-soft);border-color:transparent}
 @media(max-width:1100px){.account-menu{margin-left:auto}.brand{margin-right:0}}
 @media(max-width:700px){.header-inner{gap:10px}.account-menu>summary{max-width:230px}.account-pop{right:-52px}}
-@media(max-width:480px){html{scroll-padding-top:190px}.header-inner{display:grid;grid-template-columns:minmax(0,1fr) auto auto;padding:12px;gap:10px}.brand{grid-column:1/3}.connection-status{grid-column:3;grid-row:1;justify-self:center}.account-menu{grid-column:1;grid-row:2;margin:0;min-width:0}.account-menu>summary{max-width:100%;width:100%}#account-selection{max-width:none;flex:1}.app-header #refresh{grid-column:2/4;grid-row:2}.main-nav{grid-column:1/-1;grid-row:3;width:100%}.account-pop{position:fixed;top:auto;left:20px;right:20px;width:auto;margin-top:10px}.gauge{flex-direction:row;align-items:center}.gauge-ring{flex-basis:104px;width:104px;height:104px}.gauge-legend{gap:16px}}
-@media(max-width:360px){.gauge{gap:12px}.gauge-ring{flex-basis:86px;width:86px;height:86px}.provider-card.panel{padding:16px}.gauge-row .quota-money-values{gap:10px}}
+@media(max-width:480px){html{scroll-padding-top:190px}.header-inner{display:grid;grid-template-columns:minmax(0,1fr) auto auto;padding:12px;gap:10px}.brand{grid-column:1/3}.connection-status{grid-column:3;grid-row:1;justify-self:center}.account-menu{grid-column:1;grid-row:2;margin:0;min-width:0}.account-menu>summary{max-width:100%;width:100%}#account-selection{max-width:none;flex:1}.app-header #refresh{grid-column:2/4;grid-row:2}.main-nav{grid-column:1/-1;grid-row:3;width:100%}.account-pop{position:fixed;top:auto;left:20px;right:20px;width:auto;margin-top:10px}.gauge{flex-direction:row;align-items:flex-start}.gauge-ring,.provider-grid .gauge-ring{flex:0 0 104px;flex-basis:104px;width:104px;height:104px;min-width:104px;min-height:104px;max-height:104px}.gauge-legend{gap:16px}}
+@media(max-width:360px){.gauge{gap:12px}.gauge-ring,.provider-grid .gauge-ring{flex:0 0 86px;flex-basis:86px;width:86px;height:86px;min-width:86px;min-height:86px;max-height:86px}.provider-card.panel{padding:16px}.gauge-row .quota-money-values{gap:10px}}
 
 /* Model comparison shares the selected ledger, with independent metric and range. */
 .model-comparison{display:flex;flex-direction:column;gap:16px;min-width:0}

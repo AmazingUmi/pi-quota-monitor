@@ -44,9 +44,9 @@
       <div class="section-heading"><div><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
-            <p>Codex 额度及当期金额估算仅对应所选且已登录的账号；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
+            <p>Codex 只显示账号剩余额度，不再估算剩余金额、总额或逐期金额；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
             <p>开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
-            <p>金额为估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，除以这段时间的额度下降比例，推算当期总金额与剩余金额；不会直接除以本周期全部已用额度。OAI 额度增加或重置时间明显变化时开始新一期，不假定每期固定为 5 小时或 7 天；起点只是首次观察时间。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。启动先显示上次读数，每次成功读取均保存。</p>
+            <p>Claude / Antigravity 只保留剩余金额的条件估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，对照这段时间的额度下降，估算剩余金额；不再显示总额估算。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。OAI 不显示这些金额。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
       </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view" hidden><option value="ring" selected>圆环视图</option><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select></div></div>
@@ -73,15 +73,6 @@
           <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 AGY</span></label></div>
         </article>
       </div>
-      <details id="codex-period-details" class="panel period-panel">
-        <summary><span class="period-toggle-title">OAI 当期总金额估算 · 逐期变化</span></summary>
-        <div class="period-content">
-          <div class="chart-heading"><details class="info-help"><summary aria-label="周期趋势说明">?</summary><div class="help-content"><strong>周期趋势说明</strong><p>按所选 Codex 账号隔离；缺少有效估算的周期留空，不当作 $0。</p><p>每点代表首次观察到的一期；空缺表示不可估算。实心点为已观察到下一期，空心点表示尚未观察到下一期。提前重置只能在下一次额度读数时发现。金额按本地 Token 与 API 标价外推，非实际订阅额度。</p><p id="codex-period-summary" aria-live="polite"></p></div></details>
-            <div class="chart-controls"><div><label for="codex-period-kind">额度窗口</label><select id="codex-period-kind"><option value="weekly">Weekly</option><option value="fiveHour">5H</option></select></div></div>
-          </div>
-          <div id="codex-period-chart" class="chart period-chart" role="img" aria-label="OAI 逐期总金额估算">正在读取周期记录…</div>
-        </div>
-      </details>
     </section>
 
     <section class="section overview-section" aria-labelledby="overview-title">

@@ -4,7 +4,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { isAbsolute } from "node:path";
 import type { UsageSummary } from "./tokens/aggregate.js";
-import type { CodexPeriod } from "./codex-periods.js";
 import { PRICE_TABLE } from "./tokens/pricing.js";
 import { checkDashboardPort, DASHBOARD_HOST as HOST, DEFAULT_DASHBOARD_PORT, isDashboardPort, portErrorMessage } from "./dashboard-port.js";
 import type { AntigravityQuota, ClaudeQuota, CodexQuota, GrokQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
@@ -24,7 +23,6 @@ export interface DashboardState {
   usage: UsageSummary;
   context: { tokens: number | null; contextWindow: number; percent: number | null } | null;
   quotaEstimates: QuotaAmountEstimates;
-  codexPeriods?: CodexPeriod[];
   config: MonitorConfig;
   updatedAt: number;
 }
@@ -172,7 +170,7 @@ export class QuotaDashboard {
       } else if (pathname === "/favicon.svg") {
         reply(res, 200, assets.icon.toString("utf8"), "image/svg+xml; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok, antigravity, usage, context, quotaEstimates, codexPeriods, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
+        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok, antigravity, usage, context, quotaEstimates, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
         const summary = {
           totals: publicTotals(usage.totals),
           models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
@@ -195,13 +193,7 @@ export class QuotaDashboard {
         };
         reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok: grok ?? {}, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
-          quotaEstimates, codexPeriods: codexPeriods && (["fiveHour", "weekly"] as const)
-            .flatMap((kind) => codexPeriods.filter((period) => period.kind === kind).slice(-24))
-            .sort((a, b) => a.startedAt - b.startedAt)
-            .map(({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, sampleIntervals, quotaChanges, excludedIntervals, attribution }) =>
-            ({ id, kind, plan, startedAt, lastAt, remainingPercent, resetAt, closedAt, boundary,
-              estimatedTotalUsd, estimateAsOf, sampleStartAt, sampleEndAt, usedPercent, calibrationPercent, sampleIntervals, quotaChanges, excludedIntervals, attribution })),
+          quotaEstimates,
           dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
           config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
             showOaiInStatusbar: config.showOaiInStatusbar, showClaudeInStatusbar: config.showClaudeInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar, showGrokInStatusbar: config.showGrokInStatusbar }, updatedAt, control: this.nonce }));

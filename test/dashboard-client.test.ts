@@ -75,55 +75,19 @@ it("renders quota meters, compact totals, and distinct low-quota states", async 
   expect(get("cost-chart").getAttribute("aria-label")).toContain("估算金额");
 });
 
-it("shows OAI total alongside remaining estimates and charts recorded periods without zero-filling gaps", async () => {
-  const { get, dom, state, reload } = await mount();
-  const amounts = get("codex-windows").querySelector(".quota-money-values")!;
-  expect(amounts.textContent).toContain("剩余估算$34.07");
-  expect(amounts.textContent).toContain("总额估算$46.67");
-  expect(get("codex-windows").querySelector("summary")?.textContent).toBe("?");
+it("shows Claude amount estimates but not OAI remaining, total, or period amounts", async () => {
+  const { get, state, reload } = await mount();
+  expect(get("codex-windows").querySelector(".quota-money-values")).toBeNull();
+  expect(get("codex-windows").textContent).not.toContain("剩余估算");
+  expect(get("codex-windows").textContent).not.toContain("总额估算");
+  expect(get("codex-period-chart")).toBeNull();
   expect(get("agy-windows").querySelector(".quota-money-values")).toBeNull();
-  expect(get("claude-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
-  expect(get("codex-period-chart").querySelectorAll("circle")).toHaveLength(2);
-  expect(get("codex-period-chart").querySelectorAll(".period-active")).toHaveLength(1);
-  expect(get("codex-period-chart").querySelector(".chart-line")).toBeNull();
-  expect(get("codex-period-summary").textContent).toContain("3 期 · 2 期有估算");
-  get<HTMLSelectElement>("codex-period-kind").value = "fiveHour";
-  get("codex-period-kind").dispatchEvent(new dom.window.Event("change"));
-  expect(get("codex-period-chart").querySelector(".empty-state")?.textContent).toContain("尚无此账号");
+  expect(get("claude-windows").textContent).toContain("剩余估算");
+  expect(get("claude-windows").textContent).not.toContain("总额估算");
   state.selectedAccountId = "all";
-  state.codexPeriods = [];
   await reload();
   expect(get("codex-windows").querySelector("details")).toBeNull();
-  expect(get("codex-period-chart").querySelector("circle")).toBeNull();
-});
-
-it("keeps the OAI period chart collapsed by default and preserves disclosure state on polling", async () => {
-  const { get, state, reload } = await mount();
-  const disclosure = get<HTMLDetailsElement>("codex-period-details");
-  expect(disclosure.open).toBe(false);
-  expect(disclosure.querySelector("summary")?.textContent).toContain("OAI 当期总金额估算 · 逐期变化");
-  disclosure.open = true;
-  expect(get("codex-period-chart").querySelector("svg")).not.toBeNull();
-  state.codexPeriods![0].estimatedTotalUsd = 45;
-  await reload();
-  expect(disclosure.open).toBe(true);
-  disclosure.open = false;
-  await reload();
-  expect(disclosure.open).toBe(false);
-});
-
-it("keeps both OAI amount labels visible while estimates are unavailable", async () => {
-  const state = dashboardFixture();
-  state.quotaEstimates.codex.weekly = { note: "等待同一周期的第二次额度读数。" };
-  const { get, reload } = await mount(state);
-  const weekly = get("codex-windows").querySelector(".quota-window")!;
-  expect(weekly.querySelector(".quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
-  expect(weekly.textContent).toContain("等待同一周期的第二次额度读数");
-  expect(weekly.querySelector("details")?.open).toBe(false);
-  expect(weekly.querySelector("details .help-content")?.textContent).toContain("等待同一周期的第二次额度读数");
-  state.quotaEstimates.codex.weekly = dashboardFixture().quotaEstimates.codex.weekly;
-  await reload();
-  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("总额估算$46.67");
+  expect(get("codex-windows").querySelector(".quota-money-values")).toBeNull();
 });
 
 it("tolerates missing or partial quota estimates without losing quota readings", async () => {
@@ -134,28 +98,30 @@ it("tolerates missing or partial quota estimates without losing quota readings",
   expect(get("feedback").textContent).toBe("");
   expect(get("codex-windows").querySelector("meter")?.value).toBe(61);
   expect(get("agy-windows").querySelector("meter")?.value).toBe(83);
-  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
+  expect(get("codex-windows").querySelector(".quota-money-values")).toBeNull();
   fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ...state, quotaEstimates: { codex: {}, antigravity: {} } })));
   await reload();
   expect(get("connection-status").dataset.state).toBe("connected");
   expect(get("agy-windows").querySelector("meter")?.value).toBe(83);
   await reload();
-  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("$46.67");
+  expect(get("codex-windows").querySelector(".quota-money-values")).toBeNull();
+  expect(get("claude-windows").textContent).toContain("剩余估算 $34.07");
+  expect(get("claude-windows").textContent).not.toContain("总额估算");
 });
 
 it("preserves open amount details and focus across unchanged and changed cache polls", async () => {
   const { get, dom, state, reload } = await mount();
-  const details = get("codex-windows").querySelector("details")!;
+  const details = get("claude-windows").querySelector("details")!;
   details.open = true;
   details.querySelector("summary")!.focus();
   await reload();
-  expect(get("codex-windows").querySelector("details")).toBe(details);
-  state.codex.value!.weekly!.remainingPercent = 72;
+  expect(get("claude-windows").querySelector("details")).toBe(details);
+  state.claude.value!.weekly!.remainingPercent = 72;
   await reload();
-  const updated = get("codex-windows").querySelector("details")!;
+  const updated = get("claude-windows").querySelector("details")!;
   expect(updated.open).toBe(true);
   expect(dom.window.document.activeElement).toBe(updated.querySelector("summary"));
-  expect(get("codex-windows").querySelector("meter")?.value).toBe(72);
+  expect(get("claude-windows").querySelector("meter")?.value).toBe(72);
 });
 
 it("keeps additional model groups compact without hiding their quota summary", async () => {
@@ -219,8 +185,8 @@ it("distinguishes unknown, not-applicable, and zero quota, and keeps estimate wa
   expect(meters[0].value).toBe(0);
   expect(meters[0].dataset.level).toBe("low");
   expect(get("codex-windows").textContent).toContain("Pro 暂无 5 小时限制");
-  expect(get("codex-windows").querySelector(".quota-estimate-note")?.textContent).toContain("3 条未计价");
-  expect(get("codex-windows").querySelector(".quota-estimate-note")?.textContent).toContain("账本汇总已过期");
+  expect(get("codex-windows").textContent).not.toContain("剩余估算");
+  expect(get("codex-windows").querySelector(".quota-estimate-note")).toBeNull();
 });
 
 it("retains time/model filters and accessible empty/unpriced states", async () => {
@@ -495,18 +461,20 @@ it("normalizes and orders OAI/AGY windows without detaching their estimates or i
   expect(labels("agy-windows").slice(0, 2)).toEqual(labels("codex-windows"));
 });
 
-it("keeps correlated estimate qualifications in help while using the short amount labels", async () => {
+it("keeps correlated estimate qualifications in Claude help while using the short amount labels", async () => {
   const state = dashboardFixture();
-  state.quotaEstimates.codex.weekly.attribution = "correlated";
-  state.quotaEstimates.codex.weekly.sampleIntervals = 2;
-  state.quotaEstimates.codex.weekly.excludedIntervals = 1;
-  state.quotaEstimates.codex.weekly.note = "同区间仍可能有外部消耗";
+  state.quotaEstimates.claude.weekly.attribution = "correlated";
+  state.quotaEstimates.claude.weekly.sampleIntervals = 2;
+  state.quotaEstimates.claude.weekly.excludedIntervals = 1;
+  state.quotaEstimates.claude.weekly.note = "同区间仍可能有外部消耗";
   const { get } = await mount(state);
-  expect(get("codex-windows").querySelector(".quota-money-values")?.textContent).toContain("剩余估算$34.07总额估算$46.67");
-  expect(get("codex-windows").textContent).toContain("条件估算 · 同区间可能含外部消耗");
-  expect(get("codex-windows").textContent).toContain("账号额度下降");
-  expect(get("codex-windows").textContent).toContain("2 个合格区间");
-  expect(get("codex-windows").textContent).toContain("同区间仍可能有外部消耗");
+  expect(get("claude-windows").textContent).toContain("剩余估算 $34.07");
+  expect(get("claude-windows").textContent).not.toContain("总额估算");
+  expect(get("claude-windows").textContent).not.toContain("周期外推");
+  expect(get("claude-windows").textContent).toContain("条件估算 · 同区间可能含外部消耗");
+  expect(get("claude-windows").textContent).toContain("账号额度下降");
+  expect(get("claude-windows").textContent).toContain("2 个合格区间");
+  expect(get("codex-windows").textContent).not.toContain("剩余估算");
 });
 
 it("switches quota graphics without losing open details and distinguishes zero/full/unknown pies", async () => {
@@ -514,7 +482,7 @@ it("switches quota graphics without losing open details and distinguishes zero/f
   state.codex.value!.weekly!.remainingPercent = 0;
   state.codex.value!.fiveHour!.remainingPercent = 100;
   const { dom, get, reload } = await mount(state);
-  const detail = get("codex-windows").querySelector("details")!;
+  const detail = get("claude-windows").querySelector("details")!;
   detail.open = true;
   get<HTMLSelectElement>("quota-view").value = "pie";
   get("quota-view").dispatchEvent(new dom.window.Event("change"));
@@ -621,7 +589,7 @@ it("labels restored readings, persistence failures, and the exact calibration sa
   expect(get("codex-error").textContent).toContain("已加载上次保存的读数");
   expect(get("codex-query-status").textContent).toContain("等待刷新");
   expect(get("codex-error").textContent).toContain("读数保存失败");
-  const amount = get("codex-windows").querySelector(".quota-money p")!.textContent;
+  const amount = get("claude-windows").querySelector(".quota-money p")!.textContent;
   expect(amount).toContain("500,000 tokens");
   expect(amount).toContain("额度下降 27 个百分点");
   expect(amount).toContain("→");
@@ -652,9 +620,9 @@ it("has unique IDs and working navigation/disclosure targets", async () => {
 
 it("preserves ring help and focus through polls, and dismisses it with Escape or an outside click", async () => {
   const state = dashboardFixture();
-  state.quotaEstimates.codex.weekly.attribution = "correlated";
+  state.quotaEstimates.claude.weekly.attribution = "correlated";
   const { get, dom, reload } = await mount(state, false, true);
-  const help = () => get("codex-windows").querySelector<HTMLDetailsElement>(".gauge-head .quota-money")!;
+  const help = () => get("claude-windows").querySelector<HTMLDetailsElement>(".gauge-head .quota-money")!;
   expect(help().open).toBe(false);
   expect(help().textContent).toContain("条件估算 · 同区间可能含外部消耗");
   help().querySelector("summary")!.click();
@@ -662,12 +630,13 @@ it("preserves ring help and focus through polls, and dismisses it with Escape or
   const before = help();
   await reload();
   expect(help()).toBe(before);
-  state.codex.value!.weekly!.remainingPercent = 0;
+  state.claude.value!.weekly!.remainingPercent = 0;
   await reload();
   expect(help().open).toBe(true);
   expect(dom.window.document.activeElement).toBe(help().querySelector("summary"));
-  expect(get("codex-windows").querySelector(".gauge-num")?.textContent).toBe("0%");
-  expect(get("codex-windows").querySelectorAll(".gauge-value")).toHaveLength(1);
+  expect(get("claude-windows").querySelector(".gauge-num")).toBeNull();
+  expect(get("claude-windows").querySelector(".gauge-val")?.textContent).toContain("0%");
+  expect(get("claude-windows").querySelectorAll(".gauge-value")).toHaveLength(1);
   help().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   expect(help().open).toBe(false);
   help().querySelector("summary")!.click();
@@ -678,7 +647,7 @@ it("preserves ring help and focus through polls, and dismisses it with Escape or
 it("keeps login and unavailable-estimate notices in collapsed help", async () => {
   const state = dashboardFixture();
   state.claude = { error: "尚未登录 Claude" };
-  state.quotaEstimates.codex.weekly = { note: "等待同一周期的第二次额度读数。" };
+  state.quotaEstimates.claude.weekly = { note: "等待同一周期的第二次额度读数。" };
   const { get, dom } = await mount(state, false, true);
   expect(get("connection-status").textContent).toBe("");
   expect(dom.window.document.getElementById("intro-toggle")).toBeNull();
@@ -686,10 +655,10 @@ it("keeps login and unavailable-estimate notices in collapsed help", async () =>
   expect(loginHelp.open).toBe(false);
   expect(loginHelp.textContent).toContain("尚未登录 Claude");
   expect(loginHelp.dataset.state).toBe("warning");
-  const estimateHelp = get("codex-windows").querySelector("details")!;
+  const estimateHelp = get("claude-windows").querySelector("details")!;
   expect(estimateHelp.open).toBe(false);
   expect(estimateHelp.textContent).toContain("等待同一周期的第二次额度读数");
-  expect(get("codex-windows").querySelector(".gauge-row .quota-money-values")?.textContent).toBe("剩余估算—总额估算—");
+  expect(get("codex-windows").querySelector(".quota-money-values")).toBeNull();
   const remove = get("models").querySelector(".usage-delete")!;
   expect(remove.querySelector("svg")).not.toBeNull();
   expect(remove.textContent).toBe("");
@@ -712,7 +681,8 @@ it("selects a ledger from the account menu without switching the logged-in accou
   expect(menu.open).toBe(false);
   expect(dom.window.document.activeElement).toBe(menu.querySelector("summary"));
   expect(get("account-current").textContent).toBe("work-pro");
-  expect(get("codex-windows").querySelector(".gauge-num")?.textContent).toBe("—");
+  expect(get("codex-windows").querySelector(".gauge-num")).toBeNull();
+  expect(get("codex-windows").querySelector(".gauge-val")?.textContent).toContain("—");
   expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
 });
 

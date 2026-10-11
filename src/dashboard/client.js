@@ -89,7 +89,7 @@ function quotaPie(label, remaining, notApplicable) {
   }
   return svg;
 }
-function quotaWindow(parent, label, window, estimate, notApplicable = false, showTotal = false) {
+function quotaWindow(parent, label, window, estimate, notApplicable = false) {
   const container = document.createElement("div");
   container.className = "quota-window";
   const name = document.createElement("span");
@@ -124,38 +124,21 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false, sho
   bar.dataset.known = String(known);
   bar.append(meter);
   container.append(name, valueRow, bar, quotaPie(label, remaining, notApplicable), reset);
-  const estimated = Number.isFinite(estimate?.estimatedPeriodUsd) && Number.isFinite(estimate?.estimatedRemainingUsd);
-  if (showTotal && !notApplicable) {
-    const amounts = document.createElement("div");
-    amounts.className = "quota-money-values";
-    for (const [name, value] of [["剩余估算", estimate?.estimatedRemainingUsd],
-      ["总额估算", estimate?.estimatedPeriodUsd]]) {
-      const item = document.createElement("div");
-      const caption = document.createElement("span");
-      caption.textContent = name;
-      const figure = document.createElement("strong");
-      figure.textContent = estimated ? money(value) : "—";
-      item.append(caption, figure);
-      amounts.append(item);
-    }
-    container.append(amounts);
-  }
-  if (estimate || showTotal || notApplicable) {
+  const estimated = Number.isFinite(estimate?.estimatedRemainingUsd);
+  if (estimate || notApplicable) {
     const { details: amount, content } = infoHelp(`${label} · 额度与估算说明`, JSON.stringify([parent.dataset.group ?? "", label]));
     amount.classList.add("quota-money");
     const detail = document.createElement("p");
     if (notApplicable) {
       detail.textContent = "Pro 暂无 5 小时限制";
     } else if (estimated) {
-      if (!showTotal) {
-        const value = document.createElement("span");
-        value.className = "quota-estimate-value";
-        value.textContent = `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
-        container.append(value);
-      }
+      const value = document.createElement("span");
+      value.className = "quota-estimate-value";
+      value.textContent = `剩余估算 ${money(estimate.estimatedRemainingUsd)}`;
+      container.append(value);
       const interval = estimate.sampleStartAt && estimate.sampleEndAt ? `${new Date(estimate.sampleStartAt).toLocaleString()} → ${new Date(estimate.sampleEndAt).toLocaleString()} · ${estimate.sampleIntervals ?? 1} 个合格区间${estimate.quotaChanges ? ` / ${estimate.quotaChanges} 次额度下降` : ""}（范围内可能有排除区间） · ` : "";
       const tokens = typeof estimate.observedTokens === "number" ? `${estimate.observedTokens.toLocaleString()} tokens · ` : "";
-      detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点 · 周期外推约 ${money(estimate.estimatedPeriodUsd)}。${estimate.note ?? ""} 非账户余额。`;
+      detail.textContent = `${interval}Pi 记录金额 ${money(estimate.observedCostUsd)} · ${tokens}账号额度下降 ${estimate.usedPercent} 个百分点。${estimate.note ?? ""} 非账户余额。`;
     } else {
       detail.textContent = estimate?.note ?? "等待额度读数，暂不可估算金额。";
     }
@@ -232,12 +215,12 @@ function renderCodex(cache) {
   const result = viewingCurrent ? cache.value : undefined;
   $("codex-plan").textContent = viewingCurrent
     ? `${selected} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
-    : `${selected} · 无法查询 Codex 实时额度及当期金额估算（仅当前登录账号可查询）`;
+    : `${selected} · 无法查询 Codex 实时额度（仅当前登录账号可查询）`;
   const windows = $("codex-windows");
-  updateQuotaContent(windows, [result, latest.quotaEstimates?.codex], latest.selectedAccountId ?? "all", () => {
-    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, viewingCurrent ? latest.quotaEstimates?.codex?.weekly : undefined, false, viewingCurrent);
-    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, viewingCurrent ? latest.quotaEstimates?.codex?.fiveHour : undefined,
-      result?.plan?.toLowerCase() === "pro" && !result.fiveHour, viewingCurrent);
+  updateQuotaContent(windows, [result], latest.selectedAccountId ?? "all", () => {
+    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly);
+    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, undefined,
+      result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
   });
   $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
   renderProviderErrors($("codex-error"), viewingCurrent ? cache : {});
@@ -247,8 +230,8 @@ function renderClaude(cache) {
   $("claude-plan").textContent = result ? "Pi 当前登录的 Claude OAuth 账号 · 与 Codex 账本视图无关" : "等待 Pi 的 Claude OAuth 额度数据";
   const windows = $("claude-windows");
   updateQuotaContent(windows, [result, latest.quotaEstimates?.claude], "claude", () => {
-    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, latest.quotaEstimates?.claude?.weekly, false, true);
-    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, latest.quotaEstimates?.claude?.fiveHour, false, true);
+    quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, latest.quotaEstimates?.claude?.weekly);
+    quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, latest.quotaEstimates?.claude?.fiveHour);
   });
   $("claude-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
   renderProviderErrors($("claude-error"), cache);
@@ -506,55 +489,6 @@ function renderTrend(field, chartId, summaryId) {
   chart.append(svg);
   if (!total) notice(chart, isCost && unpriced ? "所选时段有未计价记录，无法计算这些记录的金额。" : `所选时间与模型暂无${isCost ? "可计价金额" : " Token 记录"}。`, !unpriced);
 }
-function renderCodexPeriodChart() {
-  const chart = $("codex-period-chart");
-  const kind = $("codex-period-kind").value;
-  const periods = (latest.codexPeriods ?? []).filter((period) => period.kind === kind).slice(-24);
-  const known = periods.filter((period) => typeof period.estimatedTotalUsd === "number" && Number.isFinite(period.estimatedTotalUsd));
-  $("codex-period-summary").textContent = `最近 ${periods.length} 期 · ${known.length} 期有估算 · 每点代表一期（横轴不按实际时长）`;
-  chart.setAttribute("aria-label", `OAI ${kind === "weekly" ? "weekly" : "5h"} 当期总金额估算，${periods.length} 期中 ${known.length} 期有估算`);
-  chart.replaceChildren();
-  if (!periods.length || !known.length) {
-    notice(chart, periods.length ? "已记录周期，但尚无可计价的当期总金额估算。" : "尚无此账号的 OAI 周期记录。", true);
-    return;
-  }
-  const width = Math.max(260, chart.clientWidth || 520);
-  const svg = svgElement("svg", { viewBox: `0 0 ${width} 210`, role: "presentation", "aria-hidden": "true" });
-  const left = 58, right = width - 14, top = 16, bottom = 170;
-  const peak = Math.max(...known.map((period) => period.estimatedTotalUsd));
-  for (let tick = 0; tick <= 2; tick++) {
-    const y = bottom - tick * (bottom - top) / 2;
-    svg.append(svgElement("line", { x1: left, x2: right, y1: y, y2: y, class: "grid-line" }));
-    svg.append(svgElement("text", { x: left - 8, y: y + 4, class: "axis-label", "text-anchor": "end" }, money(peak * tick / 2)));
-  }
-  let line = [];
-  for (const [index, period] of periods.entries()) {
-    const x = left + (index + 0.5) * (right - left) / periods.length;
-    const value = period.estimatedTotalUsd;
-    const hasValue = typeof value === "number" && Number.isFinite(value);
-    const y = hasValue ? bottom - (peak ? value / peak : 0) * (bottom - top) : bottom;
-    if (!hasValue) {
-      if (line.length > 1) svg.append(svgElement("path", { d: line.join(" "), class: "chart-line" }));
-      line = [];
-      const missing = svgElement("line", { x1: x - 4, x2: x + 4, y1: bottom, y2: bottom, class: "period-missing" });
-      missing.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · 暂无有效估算`));
-      svg.append(missing);
-    } else {
-      line.push(`${line.length ? "L" : "M"}${x} ${y}`);
-      svg.append(svgElement("line", { x1: x, x2: x, y1: bottom, y2: y, class: "period-stem" }));
-      const marker = svgElement("circle", { cx: x, cy: y, r: 4, class: period.closedAt ? "chart-point" : "period-active" });
-      const boundary = { increase: "额度增加", "reset-time": "重置时间变化", "plan-change": "套餐变化" }[period.boundary] ?? "";
-      marker.append(svgElement("title", {}, `${new Date(period.startedAt).toLocaleString()} 起 · ${period.closedAt ? "已观察到下一期" : "尚未观察到下一期"} · ${period.attribution === "correlated" ? "条件估算（同区间可能有外部消耗）" : "总金额估算"} ${money(value)}${period.sampleIntervals ? ` · 累计 ${period.sampleIntervals} 个账本区间` : ""}${period.quotaChanges ? ` / ${period.quotaChanges} 次额度下降` : ""}${period.excludedIntervals ? ` · 排除 ${period.excludedIntervals} 个无 Pi 用量区间` : ""}${boundary ? ` · 下一期触发：${boundary}` : ""}`));
-      svg.append(marker);
-    }
-    if (index === 0 || index === periods.length - 1 || index % Math.max(1, Math.ceil(periods.length / 5)) === 0) {
-      svg.append(svgElement("text", { x, y: 200, class: "axis-label", "text-anchor": index === 0 ? "start" : index === periods.length - 1 ? "end" : "middle" },
-        new Date(period.startedAt).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })));
-    }
-  }
-  if (line.length > 1) svg.append(svgElement("path", { d: line.join(" "), class: "chart-line" }));
-  chart.append(svg);
-}
 function renderChart() {
   const cumulative = $("chart-view").value === "cumulative";
   $("token-trend-title").textContent = cumulative ? "Token 累计消耗" : "Token 消耗";
@@ -668,7 +602,6 @@ function render() {
   renderClaude(latest.claude ?? {});
   renderGrok(latest.grok ?? {});
   renderAntigravity(agy);
-  renderCodexPeriodChart();
   const codexStatus = $("codex-query-status");
   codexStatus.replaceChildren();
   if (latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId) statusDetails(codexStatus, codex);
@@ -1070,10 +1003,6 @@ $("quota-view").addEventListener("change", (event) => {
   $("provider-grid").dataset.quotaView = view;
   $("quota-pie-legend").hidden = view !== "pie";
 });
-$("codex-period-details").addEventListener("toggle", (event) => {
-  if (event.currentTarget.open && latest) renderCodexPeriodChart();
-});
-$("codex-period-kind").addEventListener("change", renderCodexPeriodChart);
 $("chart-view").addEventListener("change", renderChart);
 $("chart-period").addEventListener("change", renderChart);
 $("chart-model").addEventListener("change", renderChart);
@@ -1104,12 +1033,6 @@ if (typeof ResizeObserver !== "undefined") {
     chartWidth = entry.contentRect.width;
     renderChart();
   }).observe($("chart"));
-  let periodWidth;
-  new ResizeObserver(([entry]) => {
-    if (entry.contentRect.width === periodWidth) return;
-    periodWidth = entry.contentRect.width;
-    if (latest) renderCodexPeriodChart();
-  }).observe($("codex-period-chart"));
 }
 function startTimers() {
   if (document.hidden) return;

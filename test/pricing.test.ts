@@ -78,6 +78,15 @@ it("prices direct providers and newer model rates, including dated Gemini promot
     .toBeCloseTo(1.5 + 0.15 * 0.2 + 7.5 * 0.1);
   expect(estimateRecordCost(record("google", "gemini-2.5-flash-lite")))
     .toBeCloseTo(0.1 + 0.01 * 0.2 + 0.4 * 0.1);
+  expect(estimateRecordCost(record("xai", "grok-4.7", { input: 10_000, cacheRead: 20_000, cacheWrite: 1000, output: 1000 })))
+    .toBeCloseTo((10_000 * 2 + 20_000 * 0.5 + 1000 * 6) / 1e6);
+  expect(estimateRecordCost(record("xai", "grok-4.7", { input: 210_000, cacheRead: 0, output: 10_000 })))
+    .toBeCloseTo((210_000 * 4 + 10_000 * 12) / 1e6);
+  expect(estimateRecordCost(record("xai", "grok-4.5", { input: 210_000, cacheRead: 0, output: 10_000 })))
+    .toBeCloseTo((210_000 * 4 + 10_000 * 12) / 1e6);
+  expect(estimateRecordCost(record("xai", "grok-4.3", { input: 10_000, cacheRead: 20_000, output: 1000 })))
+    .toBeCloseTo((10_000 * 1.25 + 20_000 * 0.2 + 1000 * 2.5) / 1e6);
+  expect(estimateRecordCost(record("xai", "grok-4"))).toBeUndefined();
   expect(estimateRecordCost(record("google-vertex", "gemini-2.5-flash"))).toBeUndefined();
   expect(estimateRecordCost(record("antigravity", "claude-fable-5-1", { cacheWrite: 1000 }))).toBeDefined();
 });
@@ -98,6 +107,9 @@ it("freezes the collected cost, preserves recorded amounts, and retroactively pr
     .toBeCloseTo(estimateRecordCost({ ...usage, provider: "antigravity", model: "gemini-3.8-flash" })!);
   expect(estimateRecordCost({ ...usage, provider: "google-vertex", model: "gemini-3.8-flash", pricingAsOf: "older-price" }))
     .toBeCloseTo(estimateRecordCost({ ...usage, provider: "google-vertex", model: "gemini-3.8-flash" })!);
+  expect(estimateRecordCost({ ...usage, provider: "xai", model: "grok-4.7", cacheWrite: 0, pricingAsOf: "older-price" }))
+    .toBeCloseTo(estimateRecordCost({ ...usage, provider: "xai", model: "grok-4.7", cacheWrite: 0 })!);
+  expect(estimateRecordCost({ ...usage, provider: "xai", model: "grok-4", pricingAsOf: "older-price" })).toBeUndefined();
   expect(estimateRecordCost({ ...usage, model: "unknown-model", pricingAsOf: "older-price" })).toBeUndefined();
   expect(estimateRecordCost({ ...usage, estimatedCostUsd: -1 })).toBeUndefined();
 });
@@ -106,6 +118,6 @@ it("publishes a dated, official-source price catalogue", () => {
   expect(PRICE_DATE).toBe("2026-09-25");
   expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(60);
   for (const row of PRICE_TABLE) {
-    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com|api-docs\.deepseek\.com)\//);
+    expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com|api-docs\.deepseek\.com|docs\.x\.ai)\//);
   }
 });
