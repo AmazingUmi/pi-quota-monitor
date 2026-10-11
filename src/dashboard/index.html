@@ -44,9 +44,9 @@
       <div class="section-heading"><div><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
-            <p>Codex 只显示账号剩余额度，不再估算剩余金额、总额或逐期金额；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
+            <p>Codex 显示账号剩余额度；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
             <p>开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
-            <p>Claude / Antigravity 只保留剩余金额的条件估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，对照这段时间的额度下降，估算剩余金额；不再显示总额估算。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。OAI 不显示这些金额。启动先显示上次读数，每次成功读取均保存。</p>
+            <p>Claude / Antigravity 的剩余金额为条件估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，对照这段时间的额度下降，估算剩余金额。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。OAI 显示剩余额度。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
       </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view" hidden><option value="ring" selected>圆环视图</option><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select></div></div>
