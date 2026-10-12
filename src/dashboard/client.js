@@ -25,6 +25,13 @@ function percent(value) {
 function countdown(resetAt) {
   if (typeof resetAt !== "number" || !Number.isFinite(resetAt)) return "重置时间未提供";
   const minutes = Math.max(0, Math.ceil((resetAt - Date.now()) / 60000));
+  const d = Math.floor(minutes / 1440), h = Math.floor(minutes % 1440 / 60), m = minutes % 60;
+  // Compact form for the quota batteries: 5d2h, 1h38m, 42m.
+  return d ? `${d}d${h}h` : h ? `${h}h${m}m` : `${m}m`;
+}
+// Full wording, kept for tooltips and screen readers.
+function countdownLong(resetAt) {
+  const minutes = Math.max(0, Math.ceil((resetAt - Date.now()) / 60000));
   const remaining = minutes >= 1440 ? `${Math.floor(minutes / 1440)}天 ${Math.floor(minutes % 1440 / 60)}小时`
     : minutes >= 60 ? `${Math.floor(minutes / 60)}小时 ${minutes % 60}分钟` : `${minutes}分钟`;
   return `约 ${remaining}后重置`;
@@ -122,7 +129,7 @@ function quotaWindow(parent, label, window, estimate, notApplicable = false) {
   const resetKnown = typeof window?.resetAt === "number" && Number.isFinite(window.resetAt);
   reset.textContent = resetKnown ? countdown(window.resetAt) : "";
   reset.hidden = !resetKnown;
-  if (resetKnown) reset.dataset.resetAt = String(window.resetAt);
+  if (resetKnown) { reset.dataset.resetAt = String(window.resetAt); reset.title = countdownLong(window.resetAt); }
   const bar = document.createElement("div");
   bar.className = "quota-bar";
   bar.dataset.known = String(known);
@@ -375,7 +382,9 @@ function renderAntigravity(cache) {
 }
 function renderCountdown() {
   for (const reset of document.querySelectorAll("[data-reset-at]")) {
-    reset.textContent = countdown(Number(reset.dataset.resetAt));
+    const at = Number(reset.dataset.resetAt);
+    reset.textContent = countdown(at);
+    (reset.closest(".gauge-reset") ?? reset).title = countdownLong(at);
   }
 }
 const SVG_NS = "http://www.w3.org/2000/svg";

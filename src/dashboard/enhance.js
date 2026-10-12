@@ -38,7 +38,7 @@
   };
   const n = (a) => a.length - 1;
 
-  // 2. Concentric gauge: outer ring = first window, inner ring = second window.
+  // 2. Battery gauge: one big vertical battery per quota window, number and reset time underneath.
   const nice = (t) => /weekly/i.test(t) ? "每周" : /\b5H\b/i.test(t) ? "5 小时" : t.replace(/ Limit Remaining$/i, "");
   function gauge(box) {
     const wins = [...box.children].filter((c) => c.classList.contains("quota-window"));
@@ -49,34 +49,36 @@
         unit: w.querySelector(".quota-unit")?.textContent ?? "", known: !!m && !m.hidden, v: m ? m.value : 0, level: m?.dataset.level ?? "normal",
         reset: w.querySelector("small.subtle"), help: w.querySelector("details.quota-money"), extras: [...w.children].filter((c) => c.matches(".quota-money-values,.quota-estimate-value")) };
     });
-    const svg = sv("svg", { class: "gauge-ring", viewBox: "0 0 136 136", width: "112", height: "112", role: "img",
-      "aria-label": info.slice(0, 2).map((i) => `${i.label}：${i.known ? `${i.num} ${i.unit}` : i.unit}`).join("；") });
-    // Always use the same outer radius so a one-window card matches a two-window card.
-    [56, 41].slice(0, Math.min(info.length, 2)).forEach((r, i) => {
-      svg.append(sv("circle", { cx: 68, cy: 68, r, class: "gauge-track" }));
-      if (info[i].known && info[i].v > 0) {
-        const c = 2 * Math.PI * r;
-        svg.append(sv("circle", { cx: 68, cy: 68, r, class: "gauge-value", "data-level": info[i].level,
-          "stroke-dasharray": `${(c * Math.max(info[i].v, 0.5)) / 100} ${c}`, transform: "rotate(-90 68 68)" }));
-      }
-    });
-    const legend = el("div", "gauge-legend");
-    info.forEach((i, idx) => {
+    const grid = el("div", "gauge");
+    info.forEach((i) => {
       const row = el("div", "gauge-row");
-      row.dataset.ring = String(idx);
+      row.dataset.level = i.level;
+      row.dataset.known = String(i.known);
+      row.style.setProperty("--v", String(i.known ? Math.max(0, Math.min(100, i.v)) : 0));
       const head = el("div", "gauge-head");
-      head.append(el("span", "gauge-dot"), el("span", "", i.label));
+      head.append(el("span", "", i.label));
       if (i.help) head.append(i.help);
+      const battery = el("div", "battery");
+      battery.setAttribute("role", "img");
+      battery.setAttribute("aria-label", `${i.label}：${i.known ? `${i.num} ${i.unit}` : i.unit}`);
+      battery.append(el("i", "battery-fill"));
+      const stage = el("div", "battery-stage");
+      stage.append(battery);
       const val = el("div", "gauge-val", i.known ? i.num : "—");
       val.append(el("small", "", i.unit));
-      row.append(head, val);
-      if (i.reset) row.append(i.reset);
+      row.append(head, stage, val);
+      if (i.reset && !i.reset.hidden) {
+        // Keep the original <small data-reset-at>: client.js refreshes its text every second.
+        const icon = sv("svg", { class: "gauge-reset-icon", viewBox: "0 0 16 16", width: "12", height: "12", "aria-hidden": "true" });
+        icon.append(sv("path", { d: "M13 8a5 5 0 1 1-1.6-3.7" }), sv("path", { d: "M12.6 2v2.6H10" }));
+        const chip = el("div", "gauge-reset");
+        chip.append(icon, i.reset);
+        row.append(chip);
+      } else if (i.reset) row.append(i.reset);
       row.append(...i.extras);
-      legend.append(row);
+      grid.append(row);
     });
-    const parts = [el("div", "gauge")];
-    parts[0].append(svg, legend);
-    box.replaceChildren(...parts);
+    box.replaceChildren(grid);
   }
   const baseUpdate = updateQuotaContent;
   updateQuotaContent = function (container, data, scope, build) {
