@@ -30,13 +30,14 @@ it("parses only bounded quota windows and stable opaque account identity", () =>
   expect(parseClaudeIdentity({ ...profile, account: { uuid: "account-two" } })).not.toBe(id);
 });
 
-it("sends Pi OAuth only to fixed Anthropic endpoints, without exposing profile data", async () => {
+it("sends Pi OAuth only to fixed endpoints and extracts allowlisted account display metadata", async () => {
   const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
     new Response(JSON.stringify(String(url).endsWith("/profile") ? profile : payload)));
   const result = await queryClaudeQuota("secret", new AbortController().signal, 1000);
   expect(result.accountId).toBe(parseClaudeIdentity(profile));
   expect(result.quota.weekly?.remainingPercent).toBe(60);
-  expect(JSON.stringify(result)).not.toContain("never-serialize");
+  expect(result.email).toBe("never-serialize@example.com");
+  expect(JSON.stringify(result.quota)).not.toContain("never-serialize");
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
     "https://api.anthropic.com/api/oauth/usage", "https://api.anthropic.com/api/oauth/profile",
   ]);

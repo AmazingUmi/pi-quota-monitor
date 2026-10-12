@@ -243,13 +243,23 @@ it("defaults missing statusbar options on for old configs and validates explicit
   });
 });
 
-it("persists statusbar settings in config and reloads them", async () => {
+it("defaults old configs to visible cards and keeps card settings independent from statusbar visibility", () => {
+  const keys = ["showCodexCard", "showClaudeCard", "showGrokCard", "showAgyCard"] as const;
+  for (const key of keys) {
+    expect(normalizeConfig({})[key]).toBe(true);
+    expect(normalizeConfig({ [key]: false })[key]).toBe(false);
+    for (const invalid of ["false", 0, null, []]) expect(normalizeConfig({ [key]: invalid })[key]).toBe(true);
+  }
+  expect(normalizeConfig({ showClaudeCard: false, showClaudeInStatusbar: true })).toMatchObject({ showClaudeCard: false, showClaudeInStatusbar: true });
+});
+
+it("persists statusbar and card settings in config and reloads them", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-quota-config-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = directory;
   try {
     expect(await loadConfig()).toEqual(DEFAULT_CONFIG);
-    const changed = { ...DEFAULT_CONFIG, dashboardPort: 39876, showOaiInStatusbar: false, showAgyInStatusbar: true };
+    const changed = { ...DEFAULT_CONFIG, dashboardPort: 39876, showOaiInStatusbar: false, showAgyInStatusbar: true, showClaudeCard: false, showGrokCard: false };
     await saveConfig(changed);
     expect(JSON.parse(await readFile(configPath(), "utf8"))).toEqual(changed);
     expect(await loadConfig()).toEqual(changed);

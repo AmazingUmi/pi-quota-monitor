@@ -10,6 +10,10 @@ let portDirty = false;
 let requestSequence = 0;
 let pollTimer;
 let countdownTimer;
+const CARD_SETTINGS = [["codex", "showCodexCard"], ["claude", "showClaudeCard"], ["grok", "showGrokCard"], ["agy", "showAgyCard"]];
+const ACCOUNT_CARDS = [["codex", "openai-codex", "Codex"], ["claude", "anthropic", "Claude"], ["grok", "xai", "Grok"]];
+let managedProvider = "openai-codex";
+const dialogOpeners = new WeakMap();
 
 function money(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -178,6 +182,7 @@ function updateQuotaContent(container, data, scope, build) {
   }
 }
 function queryLabel(cache, partialError = false) {
+  if (cache.historical) return "历史读数（非实时，不自动切换查询）";
   if (cache.error) return "查询失败";
   if (partialError) return "部分查询失败（使用可用数据）";
   if (cache.restored && cache.value) return "已加载上次读数，等待刷新";
@@ -191,7 +196,7 @@ function renderProviderErrors(container, cache, extraErrors = []) {
   const messages = [
     ...(cache.error ? [`查询错误：${cache.error}${cache.value ? "；已保留上次成功结果" : "；尚无可保留结果"}`] : []),
     ...(cache.storageError ? [cache.storageError] : []),
-    ...(cache.restored && cache.value ? ["已加载上次保存的读数；以最近成功时间为准，后台正在刷新。"] : []),
+    ...(cache.restored && cache.value ? [cache.historical ? "历史账号读数，不代表当前剩余额度；请查看读数时间。" : "已加载上次保存的读数；以最近成功时间为准，后台正在刷新。"] : []),
     ...extraErrors.filter(Boolean).map((error) => `额度数据提示：${error}`),
   ];
   const fingerprint = JSON.stringify(messages);
@@ -209,31 +214,63 @@ function statusDetails(container, cache, extraErrors = []) {
   if (cache.error) notice(container, `查询错误：${cache.error}${cache.value ? "（保留上次成功结果）" : ""}`);
   for (const error of extraErrors.filter(Boolean)) notice(container, `额度汇总错误：${error}`);
 }
+function renderCardAccount(prefix, provider, cache) {
+  const current = latest.currentAccounts?.[provider];
+  const legacy = latest.currentAccounts === undefined && provider === "openai-codex"
+    ? (latest.accounts ?? []).find((a) => a.id === latest.currentAccountId)?.name ?? latest.currentProfile : undefined;
+  const name = current?.name ?? legacy ?? "未登录 / 身份未确认";
+  const label = $(`${prefix}-account`);
+  label.textContent = `当前账号：${name}`;
+  label.title = label.textContent;
+  $(`${prefix}-account-current`).textContent = name;
+  const owner = latest.quotaAccounts?.[provider], quota = $(`${prefix}-quota-account`);
+  const historical = cache.historical || owner?.current === false;
+  quota.hidden = !owner || (!historical && owner.id === current?.id);
+  quota.textContent = owner ? `额度账号：${owner.name}${historical ? " · 历史读数（非实时）" : ""}` : "";
+  quota.title = quota.textContent;
+}
+function renderCardVisibility() {
+  if (!latest) return;
+  let count = 0;
+  for (const [prefix, key] of CARD_SETTINGS) {
+    const card = $(`${prefix}-card`);
+    card.hidden = latest.config[key] === false;
+    if (!card.hidden) count++;
+  }
+  $("provider-grid").style.setProperty("--provider-columns", String(Math.max(1, count)));
+  $("provider-grid").style.setProperty("--provider-compact-columns", String(Math.max(1, Math.min(2, count))));
+  $("quota-empty-state").hidden = count !== 0;
+}
 function renderCodex(cache) {
-  const viewingCurrent = !!latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId;
-  const selected = (latest.accounts ?? []).find((item) => item.id === latest.selectedAccountId)?.name ?? "所选账本";
+  renderCardAccount("codex", "openai-codex", cache);
+  const owner = latest.quotaAccounts?.["openai-codex"];
+  const identifiedCards = latest.quotaAccounts !== undefined;
+  const viewingCurrent = identifiedCards || (!!latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId);
+  const selected = owner?.name ?? (identifiedCards ? "Codex · 未登录 / 身份未确认" : (latest.accounts ?? []).find((item) => item.id === latest.selectedAccountId)?.name ?? "所选账本");
   const result = viewingCurrent ? cache.value : undefined;
   $("codex-plan").textContent = viewingCurrent
-    ? `${selected} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
+    ? `${selected} · ${cache.historical ? "历史读数（非实时）" : "当前登录"} · ${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"}`
     : `${selected} · 无法查询 Codex 实时额度（仅当前登录账号可查询）`;
   const windows = $("codex-windows");
-  updateQuotaContent(windows, [result], latest.selectedAccountId ?? "all", () => {
+  updateQuotaContent(windows, [result], owner?.id ?? latest.selectedAccountId ?? "all", () => {
     quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly);
     quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, undefined,
       result?.plan?.toLowerCase() === "pro" && !result.fiveHour);
   });
-  $("codex-success").textContent = viewingCurrent ? `最近成功查询：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
+  $("codex-success").textContent = viewingCurrent ? `${cache.historical ? "历史读数时间" : "最近成功查询"}：${lastSuccess(cache)}` : "所选视图无可查询的 Codex 实时额度";
   renderProviderErrors($("codex-error"), viewingCurrent ? cache : {});
 }
 function renderClaude(cache) {
+  renderCardAccount("claude", "anthropic", cache);
   const result = cache?.value;
-  $("claude-plan").textContent = result ? "Pi 当前登录的 Claude OAuth 账号 · 与 Codex 账本视图无关" : "等待 Pi 的 Claude OAuth 额度数据";
+  const owner = latest.quotaAccounts?.anthropic;
+  $("claude-plan").textContent = `${owner?.name ?? "Claude · 未登录 / 身份未确认"} · ${cache.historical ? "历史读数（非实时）" : "当前登录"}${result ? "" : " · 等待额度数据"}`;
   const windows = $("claude-windows");
-  updateQuotaContent(windows, [result, latest.quotaEstimates?.claude], "claude", () => {
+  updateQuotaContent(windows, [result, latest.quotaEstimates?.claude], owner?.id ?? "claude", () => {
     quotaWindow(windows, WINDOW_LABELS.weekly, result?.weekly, latest.quotaEstimates?.claude?.weekly);
     quotaWindow(windows, WINDOW_LABELS.fiveHour, result?.fiveHour, latest.quotaEstimates?.claude?.fiveHour);
   });
-  $("claude-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  $("claude-success").textContent = `${cache.historical ? "历史读数时间" : "最近成功查询"}：${lastSuccess(cache)}`;
   renderProviderErrors($("claude-error"), cache);
 }
 function grokWindowLabel(window) {
@@ -242,15 +279,15 @@ function grokWindowLabel(window) {
   return "Credit Remaining";
 }
 function renderGrok(cache) {
+  renderCardAccount("grok", "xai", cache);
   const result = cache?.value;
-  $("grok-plan").textContent = result
-    ? `Pi 当前 xAI OAuth${result.plan ? ` · ${result.plan}` : ""} · 共享额度，非 API 余额`
-    : "等待 Pi 的 xAI OAuth 额度数据";
+  const owner = latest.quotaAccounts?.xai;
+  $("grok-plan").textContent = `${owner?.name ?? "Grok · 未登录 / 身份未确认"} · ${cache.historical ? "历史读数（非实时）" : "当前登录"}${result?.plan ? ` · ${result.plan}` : ""} · 共享额度，非 API 余额`;
   const windows = $("grok-windows");
-  updateQuotaContent(windows, [result], "grok", () => {
+  updateQuotaContent(windows, [result], owner?.id ?? "grok", () => {
     quotaWindow(windows, grokWindowLabel(result?.credit), result?.credit);
   });
-  $("grok-success").textContent = `最近成功查询：${lastSuccess(cache)}`;
+  $("grok-success").textContent = `${cache.historical ? "历史读数时间" : "最近成功查询"}：${lastSuccess(cache)}`;
   renderProviderErrors($("grok-error"), cache);
 }
 function modelGroupName(model) {
@@ -261,7 +298,7 @@ function modelGroupName(model) {
 }
 function renderAntigravity(cache) {
   const result = cache.value;
-  $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 所有账本视图共享`;
+  $("agy-plan").textContent = `${result?.plan ? `计划：${result.plan}` : result ? "计划信息未提供" : "等待额度数据"} · 独立只读登录，不参与 OAuth 账号管理`;
   const container = $("agy-windows");
   updateQuotaContent(container, [result, latest.quotaEstimates?.antigravity], "antigravity", () => {
     const groups = result?.groups ?? [];
@@ -552,7 +589,7 @@ function render() {
   if (!latest) return;
   const account = $("usage-account");
   const accountChoices = latest.accounts ?? [];
-  if (account.options.length !== accountChoices.length || accountChoices.some((choice, index) => account.options[index]?.value !== choice.id)) {
+  if (account.options.length !== accountChoices.length || accountChoices.some((choice, index) => account.options[index]?.value !== choice.id || account.options[index]?.textContent !== choice.name)) {
     account.replaceChildren();
     for (const choice of accountChoices) {
       const option = document.createElement("option");
@@ -562,24 +599,9 @@ function render() {
     }
   }
   account.value = latest.selectedAccountId ?? "all";
-  const ledgerLabel = account.value === "all" ? "总量" : accountChoices.find((choice) => choice.id === account.value)?.name ?? "当前账户";
-  $("account-selection").textContent = ledgerLabel;
-  $("account-selection").title = ledgerLabel;
-  $("account-menu").querySelector("summary").setAttribute("aria-label", `账户选择：${ledgerLabel}`);
-  const profiles = latest.profiles ?? [];
-  for (const id of ["account-switch-profile", "account-manage-profile", "account-reset-profile"]) {
-    const select = $(id);
-    const previous = select.value;
-    if (select.options.length !== profiles.length || profiles.some((profile, index) => select.options[index]?.value !== profile.name)) {
-      select.replaceChildren(...profiles.map((profile) => new Option(profile.name, profile.name)));
-      select.value = profiles.some((profile) => profile.name === previous) ? previous : latest.currentProfile ?? profiles[0]?.name ?? "";
-    }
-  }
-  $("account-current").textContent = latest.currentProfile ?? (latest.currentAccountId ? "尚未保存为 profile" : "未登录 / 无账号 ID");
-  $("account-use").disabled = busy || !profiles.length;
-  $("account-manage").disabled = busy || !profiles.length;
-  $("account-delete").disabled = busy || !profiles.length || $("account-manage-profile").value === latest.currentProfile;
-  $("account-reset-usage").disabled = busy || !profiles.length;
+  $("ledger-selection").textContent = accountChoices.find((choice) => choice.id === account.value)?.name ?? "所选账本";
+  account.title = $("ledger-selection").textContent;
+  renderAccountControls();
   const backupSelect = $("account-backup");
   const backups = latest.backups ?? [];
   const previousBackup = backupSelect.value;
@@ -604,7 +626,7 @@ function render() {
   renderAntigravity(agy);
   const codexStatus = $("codex-query-status");
   codexStatus.replaceChildren();
-  if (latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId) statusDetails(codexStatus, codex);
+  if (latest.quotaAccounts !== undefined || (latest.currentAccountId && latest.selectedAccountId === latest.currentAccountId)) statusDetails(codexStatus, codex);
   else row(codexStatus, "查询状态", "所选视图无法查询实时 Codex 额度");
   const claudeStatus = $("claude-query-status");
   claudeStatus.replaceChildren();
@@ -705,12 +727,8 @@ function render() {
   renderPriceTable(pricing);
   renderPortSettings();
   if (document.activeElement !== $("interval")) $("interval").value = String(latest.config.refreshIntervalSeconds);
-  if (!busy) {
-    $("show-oai").checked = latest.config.showOaiInStatusbar;
-    $("show-claude").checked = latest.config.showClaudeInStatusbar;
-    $("show-agy").checked = latest.config.showAgyInStatusbar;
-    $("show-grok").checked = latest.config.showGrokInStatusbar !== false;
-  }
+  renderCardVisibility();
+  if (!busy) syncDisplayControls();
   $("last-check").textContent = `账本更新：${usage.updatedAt ? new Date(usage.updatedAt).toLocaleTimeString() : "尚未成功读取"} · 页面读取：${new Date(latest.updatedAt).toLocaleTimeString()}`;
 }
 function renderPortSettings() {
@@ -773,13 +791,6 @@ async function load() {
     return false;
   }
   if (requestId !== requestSequence || selectedAccount !== requested) return false;
-  // A switch leaves the old profile in the account list. Do not keep viewing its
-  // historical ledger when this tab was following the previously active account.
-  if (latest?.currentAccountId && requested === latest.currentAccountId
-    && state.currentAccountId !== latest.currentAccountId) {
-    selectedAccount = undefined;
-    return load();
-  }
   control = state.control;
   latest = state;
   selectedAccount = state.selectedAccountId;
@@ -796,24 +807,22 @@ function loadError(error) {
   $("connection-status").title = "连接已断开";
   $("feedback").textContent = error.message || "无法连接本地 Pi 会话";
 }
-function syncStatusbarControls() {
+function syncDisplayControls() {
   if (!latest) return;
   $("show-oai").checked = latest.config.showOaiInStatusbar;
   $("show-claude").checked = latest.config.showClaudeInStatusbar;
   $("show-agy").checked = latest.config.showAgyInStatusbar;
   $("show-grok").checked = latest.config.showGrokInStatusbar !== false;
+  for (const [prefix, key] of CARD_SETTINGS) $(`show-${prefix}-card`).checked = latest.config[key] !== false;
+  renderCardVisibility();
 }
 function setBusy(value) {
   busy = value;
-  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-claude", "show-agy", "show-grok", "account-add", "account-history",
-    "account-name", "account-import-name", "account-import-path", "backup-location", "backup-directory", "backup-restore-path",
+  for (const id of ["refresh", "interval", "interval-submit", "show-oai", "show-claude", "show-agy", "show-grok", "show-codex-card", "show-claude-card", "show-grok-card", "show-agy-card",
+    "account-name", "account-import-name", "account-import-path", "account-note", "backup-location", "backup-directory", "backup-restore-path",
     "account-backup-create", "account-restore-path", "dashboard-port", "port-check", "port-submit", "port-use-current"]) $(id).disabled = value;
   $("refresh").textContent = value ? "处理中…" : "↻ 刷新额度";
-  $("account-use").disabled = value || !(latest?.profiles?.length);
-  $("account-switch-confirm").disabled = value || !(latest?.profiles?.length);
-  $("account-manage").disabled = value || !(latest?.profiles?.length);
-  $("account-delete").disabled = value || !(latest?.profiles?.length) || $("account-manage-profile").value === latest?.currentProfile;
-  $("account-reset-usage").disabled = value || !(latest?.profiles?.length);
+  updateAccountButtons();
   $("account-restore").disabled = value || !(latest?.backups?.length);
   for (const button of document.querySelectorAll(".usage-delete")) button.disabled = value || !!latest?.usage?.stale;
 }
@@ -822,7 +831,7 @@ async function deleteUsageRow(item) {
   const account = latest.selectedAccountId;
   if (!account) return;
   const count = item.pricedRecords + item.unpricedRecords;
-  const scope = account === "all" ? "所有账本视图" : item.provider === "openai-codex" ? "此账号视图" : "所有账本视图（共享模型）";
+  const scope = account === "all" ? "总体用量" : latest.accounts?.find((a) => a.id === account)?.name ?? "当前统计范围";
   if (!confirm(`先自动备份，再删除 ${scope}中 ${item.provider} / ${item.model} 的 ${count} 条现有本地记录？统计及趋势将同步扣除；不会影响 Provider 实际额度。`)) return;
   setBusy(true);
   $("feedback").textContent = "正在备份并删除记录…";
@@ -848,13 +857,16 @@ async function action(path, body) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
+    // A successful save remains applied even if the subsequent state read goes offline.
+    if (path === "/api/cards") { Object.assign(latest.config, body); renderCardVisibility(); }
     if (await load()) $("feedback").textContent = "已更新";
-    else syncStatusbarControls();
+    else syncDisplayControls();
   } catch (error) {
-    syncStatusbarControls();
+    syncDisplayControls();
     $("feedback").textContent = error.message || "操作失败";
   } finally {
     setBusy(false);
+    syncDisplayControls();
   }
 }
 async function queueAccountCommand(command, args = "", feedbackId = "account-feedback", dialogId) {
@@ -868,7 +880,7 @@ async function queueAccountCommand(command, args = "", feedbackId = "account-fee
     });
     if (!response.ok) throw new Error((await response.json()).error ?? "操作失败");
     const message = command === "use"
-      ? "已提交账号切换；请在 Pi 窗口确认。凭据切换后当前会话不变，本页将跟随新账号。"
+      ? "已提交账号切换；请在 Pi 窗口确认。当前会话、模型及账本筛选均不变。"
       : "已发送到 Pi；如需确认，请查看 Pi 窗口。完成后本页会自动更新。";
     $(feedbackId).textContent = message;
     if (dialogId) { $(dialogId).close(); $("account-feedback").textContent = message; }
@@ -932,17 +944,109 @@ $("dashboard-port").addEventListener("input", () => { portDirty = true; $("port-
 $("port-check").addEventListener("click", () => { void portAction(false); });
 $("port-form").addEventListener("submit", (event) => { event.preventDefault(); void portAction(true); });
 const profileName = (value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
-$("account-use").addEventListener("click", () => { $("account-switch-dialog").showModal(); });
-$("account-add").addEventListener("click", () => { $("account-add-dialog").showModal(); });
-$("account-manage").addEventListener("click", () => { $("account-manage-dialog").showModal(); });
-$("account-history").addEventListener("click", () => { $("account-history-dialog").showModal(); });
+function providerOf(item) { return item.provider ?? "openai-codex"; }
+function scopedProfiles(provider = managedProvider) { return (latest?.profiles ?? []).filter((p) => providerOf(p) === provider); }
+function scopedIdentities() { return (latest?.accounts ?? []).filter((a) => a.key && providerOf(a) === managedProvider); }
+function profileValue(p) { return p.provider ? `${p.provider}/${p.name}` : p.name; }
+function profileArgs(value) {
+  const p = scopedProfiles().find((p) => profileValue(p) === value);
+  // Legacy profiles are Codex too: never let the current model choose their provider.
+  return p && profileName(p.name) ? `${managedProvider} ${p.name}` : undefined;
+}
+function selectedProfileIsCurrent() {
+  const p = scopedProfiles().find((p) => profileValue(p) === $("account-manage-profile").value);
+  return !!p && (p.current === true || (p.key && latest?.currentAccounts?.[managedProvider]?.id === `account:${p.key}`)
+    || (p.current === undefined && providerOf(p) === "openai-codex" && p.name === latest?.currentProfile));
+}
+function renderAccountControls() {
+  const profiles = scopedProfiles(), identities = scopedIdentities();
+  const choices = profiles.map((p) => [p.displayName ? `${p.displayName}${p.current ? "（当前）" : ""}` : p.name, profileValue(p)]);
+  for (const id of ["account-switch-profile", "account-manage-profile"]) syncChoices($(id), choices);
+  syncChoices($("account-reset-profile"), latest.currentAccounts !== undefined
+    ? identities.map((a) => [a.name, a.id]) : profiles.map((p) => [p.name, p.name]));
+  const previousNote = $("account-note-target").value;
+  syncChoices($("account-note-target"), identities.map((a) => [a.name, a.id]));
+  if (previousNote !== $("account-note-target").value || (!$("account-note").dataset.dirty && document.activeElement !== $("account-note"))) syncNote();
+  updateAccountButtons();
+}
+function updateAccountButtons() {
+  for (const [prefix, provider] of ACCOUNT_CARDS) {
+    $(`${prefix}-account-use`).disabled = busy || !scopedProfiles(provider).length;
+    for (const action of ["add", "manage", "history"]) $(`${prefix}-account-${action}`).disabled = busy;
+  }
+  const profiles = scopedProfiles(), identities = scopedIdentities();
+  const switchValid = profiles.some((p) => profileValue(p) === $("account-switch-profile").value);
+  const manageValid = profiles.some((p) => profileValue(p) === $("account-manage-profile").value);
+  $("account-switch-profile").disabled = busy || !profiles.length;
+  $("account-manage-profile").disabled = busy || !profiles.length;
+  $("account-switch-confirm").disabled = busy || !switchValid;
+  $("account-delete").disabled = busy || !manageValid || selectedProfileIsCurrent();
+  $("account-note-target").disabled = busy || !identities.length;
+  $("account-note-submit").disabled = busy || !identities.some((a) => a.id === $("account-note-target").value);
+  const resetValue = $("account-reset-profile").value;
+  const resetValid = latest?.currentAccounts !== undefined ? identities.some((a) => a.id === resetValue) : profiles.some((p) => p.name === resetValue);
+  $("account-reset-profile").disabled = busy || !$("account-reset-profile").options.length;
+  $("account-reset-usage").disabled = busy || !resetValid;
+}
+function syncChoices(select, choices) {
+  const previous = select.value;
+  if (select.options.length === choices.length && choices.every(([text, value], i) => select.options[i]?.value === value && select.options[i]?.textContent === text)) return;
+  select.replaceChildren(...choices.map(([text, value]) => new Option(text, value)));
+  select.value = choices.some(([, value]) => value === previous) ? previous : choices[0]?.[1] ?? "";
+}
+function syncNote() {
+  $("account-note").value = latest?.accounts?.find((a) => a.id === $("account-note-target").value)?.note ?? "";
+  delete $("account-note").dataset.dirty;
+}
+function openAccountDialog(action, menu) {
+  const card = ACCOUNT_CARDS.find(([, provider]) => provider === menu.dataset.provider);
+  if (busy || !latest || !card || !["switch", "add", "manage", "history"].includes(action)) return;
+  if (managedProvider !== card[1]) {
+    managedProvider = card[1];
+    delete $("account-note").dataset.dirty;
+    for (const id of ["account-name", "account-import-name", "account-import-path", "account-note"]) $(id).value = "";
+    for (const id of ["account-switch-profile", "account-manage-profile", "account-reset-profile", "account-note-target"]) $(id).replaceChildren();
+    for (const id of ["account-add-feedback", "account-switch-feedback", "account-manage-feedback", "history-feedback"]) $(id).textContent = "";
+  }
+  for (const [kind, title] of [["switch", "切换账号"], ["add", "新增账号"], ["manage", "管理账号"], ["history", "历史与备份"]]) {
+    $(`account-${kind}-title`).textContent = `${card[2]} · ${title}`;
+  }
+  $("account-login-command").textContent = `/login ${managedProvider}`;
+  renderAccountControls();
+  const opener = menu.querySelector("summary"), dialog = $(`account-${action}-dialog`);
+  menu.open = false;
+  opener.focus(); // Native dialog close/Escape returns to a visible control, not a closed menu item.
+  dialogOpeners.set(dialog, opener);
+  dialog.showModal();
+}
+const accountMenus = [...document.querySelectorAll(".account-menu")];
+for (const menu of accountMenus) {
+  menu.querySelector("summary").addEventListener("click", () => { for (const other of accountMenus) if (other !== menu) other.open = false; });
+  for (const button of menu.querySelectorAll("[data-account-action]")) {
+    button.addEventListener("click", () => { openAccountDialog(button.dataset.accountAction, menu); });
+  }
+}
+document.addEventListener("click", (event) => { for (const menu of accountMenus) if (!menu.contains(event.target)) menu.open = false; });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  for (const menu of accountMenus) {
+    if (menu.open && menu.contains(document.activeElement)) menu.querySelector("summary").focus();
+    menu.open = false;
+  }
+});
+for (const dialog of document.querySelectorAll('dialog[id^="account-"]')) {
+  dialog.addEventListener("close", () => {
+    const opener = dialogOpeners.get(dialog);
+    if (opener) (opener.closest(".provider-card").hidden ? $("settings").querySelector("summary") : opener).focus();
+  });
+}
 for (const button of document.querySelectorAll("[data-close-dialog]")) {
   button.addEventListener("click", () => { $(button.dataset.closeDialog).close(); });
 }
 $("account-save-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const name = $("account-name").value.trim();
-  if (profileName(name)) void queueAccountCommand("save", name, "account-add-feedback", "account-add-dialog");
+  if (!name || profileName(name)) void queueAccountCommand("save", `${managedProvider}${name ? ` ${name}` : ""}`, "account-add-feedback", "account-add-dialog");
 });
 $("account-import-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -952,24 +1056,35 @@ $("account-import-form").addEventListener("submit", (event) => {
     $("account-add-feedback").textContent = "名称或 Pi 机器上的 JSON 路径无效。";
     return;
   }
-  void queueAccountCommand("import", `${name} ${path}`, "account-add-feedback", "account-add-dialog");
+  void queueAccountCommand("import", `${managedProvider} ${name} ${path}`, "account-add-feedback", "account-add-dialog");
 });
 $("account-switch-confirm").addEventListener("click", () => {
-  const name = $("account-switch-profile").value;
-  if (profileName(name) && confirm(`切换到 ${name}？Pi 中还会要求确认；当前会话不会重建。`)) {
-    void queueAccountCommand("use", name, "account-switch-feedback", "account-switch-dialog");
+  const args = profileArgs($("account-switch-profile").value);
+  if (args && confirm(`切换到 ${args}？Pi 中还会要求确认；不会切换模型或重建会话。`)) {
+    void queueAccountCommand("use", args, "account-switch-feedback", "account-switch-dialog");
   }
 });
-$("account-manage-profile").addEventListener("change", () => {
-  $("account-delete").disabled = busy || $("account-manage-profile").value === latest?.currentProfile;
-});
+$("account-switch-profile").addEventListener("change", updateAccountButtons);
+$("account-manage-profile").addEventListener("change", updateAccountButtons);
 $("account-delete").addEventListener("click", () => {
-  const name = $("account-manage-profile").value;
-  if (profileName(name) && confirm(`备份后删除 ${name} 的保存凭据？历史用量仍保留。`)) void queueAccountCommand("delete", name, "account-manage-feedback", "account-manage-dialog");
+  const args = profileArgs($("account-manage-profile").value);
+  if (args && confirm(`备份后删除 ${args} 的保存凭据？历史账号和用量仍保留。`)) void queueAccountCommand("delete", args, "account-manage-feedback", "account-manage-dialog");
 });
 $("account-reset-usage").addEventListener("click", () => {
-  const name = $("account-reset-profile").value;
-  if (profileName(name) && confirm(`先备份，再清除 ${name} 的本地 Codex 用量？不会重置 OpenAI 实际额度。`)) void queueAccountCommand("reset-usage", name, "history-feedback");
+  const value = $("account-reset-profile").value;
+  const known = latest.currentAccounts !== undefined ? scopedIdentities().some((a) => a.id === value) : scopedProfiles().some((p) => p.name === value);
+  if (known && (profileName(value) || /^account:[a-f0-9]{64}$/.test(value)) && confirm("先备份，再清除此账号的本地用量？不影响其他账号或服务商实际额度。")) void queueAccountCommand("reset-usage", `${managedProvider} ${value}`, "history-feedback");
+});
+$("account-reset-profile").addEventListener("change", updateAccountButtons);
+$("account-note-target").addEventListener("change", () => { syncNote(); updateAccountButtons(); });
+$("account-note").addEventListener("input", () => { $("account-note").dataset.dirty = "true"; });
+$("account-note-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const id = $("account-note-target").value, note = $("account-note").value.trim();
+  if (scopedIdentities().some((a) => a.id === id) && /^account:[a-f0-9]{64}$/.test(id) && note.length <= 120 && !/[\r\n\u0000]/.test(note)) {
+    delete $("account-note").dataset.dirty;
+    void queueAccountCommand("note", `${managedProvider} ${id}${note ? ` ${note}` : ""}`, "account-manage-feedback");
+  }
 });
 $("backup-location").addEventListener("change", () => {
   $("backup-directory").hidden = $("backup-location").value !== "custom";
@@ -1026,6 +1141,11 @@ $("show-agy").addEventListener("change", (event) => {
 $("show-grok").addEventListener("change", (event) => {
   void action("/api/statusbar", { showGrokInStatusbar: event.currentTarget.checked });
 });
+for (const [prefix, key] of CARD_SETTINGS) {
+  $(`show-${prefix}-card`).addEventListener("change", (event) => {
+    void action("/api/cards", { [key]: event.currentTarget.checked });
+  });
+}
 if (typeof ResizeObserver !== "undefined") {
   let chartWidth;
   new ResizeObserver(([entry]) => {

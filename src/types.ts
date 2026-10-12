@@ -59,6 +59,9 @@ export interface TokenUsageRecord extends TokenTotals {
   provider: string;
   model: string;
   accountId?: string;
+  /** Opaque provider-qualified identity; legacy records derive it from provider/accountId. */
+  accountKey?: string;
+  authType?: "oauth" | "api-key" | "unknown";
   source?: "pi-message" | "pi-subagents";
   sessionId?: string;
   runId?: string;
@@ -73,6 +76,7 @@ export interface ProviderCache<T> {
   error?: string;
   storageError?: string;
   restored?: boolean;
+  historical?: boolean;
 }
 
 export interface QuotaAmountEstimate {
@@ -118,4 +122,10 @@ export interface MonitorConfig {
   showAgyInStatusbar: boolean;
   showClaudeInStatusbar: boolean;
   showGrokInStatusbar: boolean;
+  showCodexCard: boolean;
+  showClaudeCard: boolean;
+  showGrokCard: boolean;
+  showAgyCard: boolean;
 }
+
+export type CardVisibilitySettings = Partial<Pick<MonitorConfig, "showCodexCard" | "showClaudeCard" | "showGrokCard" | "showAgyCard">>;

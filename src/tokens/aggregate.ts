@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { configDirectory, usageDirectory } from "../config.js";
 import { withLedgerLock } from "../history.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
+import { accountKey, isAccountProvider, matchesUsage, recordAccountId, usageScope, type AccountProvider, type UsageScope } from "../account-identity.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { localDate } from "./store.js";
-import { ledgerDateMatches } from "./ledger-date.js";
+import { validUsageRecord } from "./record.js";
 import { estimateRecordCost, PRICE_DATE } from "./pricing.js";
 
 export interface ModelUsage extends TokenTotals {
@@ -24,6 +25,8 @@ export interface UsageSummary {
   pricing: { asOf: string; estimatedCostUsd: number; pricedRecords: number; unpricedRecords: number; unpricedTokens: number };
   records: number;
   invalidRecords: number;
+  accountScopes?: Array<{ provider: AccountProvider; accountId: string }>;
+  providers?: string[];
   childUsageIncomplete?: boolean;
   updatedAt?: number;
   stale: boolean;
@@ -34,6 +37,7 @@ interface PeriodCost {
   timestamp: number;
   provider: string;
   accountId?: string;
+  authType?: TokenUsageRecord["authType"];
   model: string;
   totalTokens: number;
   estimatedCostUsd: number;
@@ -64,22 +68,14 @@ interface FileState {
   daily: Map<string, TimeBucket>;
   hours: Map<string, TimeBucket>;
   periodCosts: Map<string, PeriodCost>;
+  accounts: Map<string, { provider: AccountProvider; accountId: string }>;
+  providers: Set<string>;
 }
 
 const FILE_NAME = /^usage-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const MAX_LINE = 1024 * 1024;
 const PERIOD_COST_RETENTION_MS = 8 * 24 * 60 * 60 * 1000;
 const keyFor = (provider: string, model: string) => JSON.stringify([provider, model]);
-
-function validRecord(value: unknown, day: string): value is TokenUsageRecord {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Partial<TokenUsageRecord>;
-  return typeof record.timestamp === "number" && ledgerDateMatches(record.timestamp, day)
-    && typeof record.provider === "string" && record.provider.length > 0
-    && typeof record.model === "string" && record.model.length > 0
-    && (["input", "output", "reasoning", "cacheRead", "cacheWrite", "totalTokens"] as const)
-      .every((field) => typeof record[field] === "number" && Number.isFinite(record[field]) && record[field] >= 0);
-}
 
 /** Incremental, transactional ledger reader. A cursor is committed only after the full scan succeeds. */
 export class UsageAggregator {
@@ -88,7 +84,8 @@ export class UsageAggregator {
   private inFlight?: Promise<void>;
   private timer?: NodeJS.Timeout;
 
-  constructor(private readonly directory = usageDirectory(), private readonly accountId?: string | null) {}
+  readonly scope: UsageScope;
+  constructor(private readonly directory = usageDirectory(), scope?: UsageScope | string | null) { this.scope = usageScope(scope); }
 
   state(): UsageSummary { return this.summary; }
 
@@ -99,6 +96,7 @@ export class UsageAggregator {
     for (const state of this.files.values()) {
       for (const item of state.periodCosts.values()) {
         if (item.provider !== provider || item.timestamp < startAt || item.timestamp >= endAt || (modelFilter && !modelFilter(item.model))) continue;
+        if (accountId && item.authType === "api-key") continue;
         if (accountId && item.accountId !== accountId) {
           // Unassigned local activity makes the calibration incomplete. Other
           // identified accounts are separate and must not enter this account's cost.
@@ -170,8 +168,8 @@ export class UsageAggregator {
         if (!stat.isFile()) continue;
         const previous = this.files.get(name);
         const state: FileState = previous && previous.dev === stat.dev && previous.ino === stat.ino && stat.size >= previous.offset
-          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), daily: new Map(previous.daily), hours: new Map(previous.hours), periodCosts: new Map(previous.periodCosts) }
-          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), daily: new Map(), hours: new Map(), periodCosts: new Map() };
+          ? { ...previous, pending: Buffer.from(previous.pending), models: new Map(previous.models), daily: new Map(previous.daily), hours: new Map(previous.hours), periodCosts: new Map(previous.periodCosts), accounts: new Map(previous.accounts), providers: new Set(previous.providers) }
+          : { dev: stat.dev, ino: stat.ino, offset: 0, pending: Buffer.alloc(0), discarding: false, records: 0, invalidRecords: 0, models: new Map(), daily: new Map(), hours: new Map(), periodCosts: new Map(), accounts: new Map(), providers: new Set() };
         const day = FILE_NAME.exec(name)![1];
         if (stat.size > state.offset) {
           let bytes = 0;
@@ -198,7 +196,11 @@ export class UsageAggregator {
     const hourly = new Map<string, TimeBucket>();
     let records = 0;
     let invalidRecords = 0;
-    for (const [name, state] of files) {
+    const accounts = new Map<string, { provider: AccountProvider; accountId: string }>();
+    const providers = new Set<string>();
+    for (const state of files.values()) {
+      for (const [key, account] of state.accounts) accounts.set(key, account);
+      for (const provider of state.providers) providers.add(provider);
       records += state.records;
       invalidRecords += state.invalidRecords;
       for (const item of state.models.values()) {
@@ -237,7 +239,7 @@ export class UsageAggregator {
       unpricedTokens: result.unpricedTokens + item.unpricedTokens,
     }), { asOf: PRICE_DATE, estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 });
     const order = (a: TimeBucket, b: TimeBucket) => a.bucket.localeCompare(b.bucket) || a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
-    return { files, summary: { totals, models: sorted, timeline: { hours: [...hourly.values()].sort(order), days: [...daily.values()].sort(order), today: localDate(now), currentHour: firstHour + 23 * 3_600_000 }, pricing, records, invalidRecords, updatedAt: Date.now(), stale: false } };
+    return { files, summary: { totals, models: sorted, timeline: { hours: [...hourly.values()].sort(order), days: [...daily.values()].sort(order), today: localDate(now), currentHour: firstHour + 23 * 3_600_000 }, pricing, records, invalidRecords, accountScopes: [...accounts.values()], providers: [...providers].sort(), updatedAt: Date.now(), stale: false } };
   }
 
   private consume(state: FileState, chunk: Buffer, day: string): void {
@@ -250,10 +252,12 @@ export class UsageAggregator {
       else if (line.length) {
         try {
           const value: unknown = JSON.parse(line.toString("utf8"));
-          if (!validRecord(value, day)) throw new Error("Invalid record");
-          // Legacy Codex entries without an account ID are intentionally unassigned.
-          if (this.accountId !== undefined && value.provider === "openai-codex"
-            && (this.accountId === null ? value.accountId !== undefined : value.accountId !== this.accountId)) {
+          if (!validUsageRecord(value, day)) throw new Error("Invalid record");
+          state.providers.add(value.provider);
+          const id = recordAccountId(value);
+          if (id && isAccountProvider(value.provider)) state.accounts.set(accountKey(value.provider, id), { provider: value.provider, accountId: id });
+          // Every account view is strict; other providers never enter its ledger.
+          if (!matchesUsage(value, this.scope)) {
             state.pending = Buffer.alloc(0);
             state.discarding = false;
             start = i + 1;
@@ -263,13 +267,14 @@ export class UsageAggregator {
           const prior = state.models.get(key) ?? { provider: value.provider, model: value.model, ...emptyTotals(), estimatedCostUsd: 0, pricedRecords: 0, unpricedRecords: 0, unpricedTokens: 0 };
           const cost = estimateRecordCost(value);
           if (value.timestamp >= Date.now() - PERIOD_COST_RETENTION_MS) {
-            const costKey = JSON.stringify([value.timestamp, value.provider, value.model, value.accountId ?? null]);
+            const costKey = JSON.stringify([value.timestamp, value.provider, value.model, value.accountId ?? null, value.authType ?? null]);
             const periodCost = state.periodCosts.get(costKey);
             state.periodCosts.set(costKey, {
               timestamp: value.timestamp,
               provider: value.provider,
               model: value.model,
-              ...(value.accountId ? { accountId: value.accountId } : {}),
+              ...(recordAccountId(value) ? { accountId: recordAccountId(value) } : {}),
+              ...(value.authType ? { authType: value.authType } : {}),
               totalTokens: (periodCost?.totalTokens ?? 0) + value.totalTokens,
               estimatedCostUsd: (periodCost?.estimatedCostUsd ?? 0) + (cost ?? 0),
               pricedRecords: (periodCost?.pricedRecords ?? 0) + (cost === undefined ? 0 : 1),

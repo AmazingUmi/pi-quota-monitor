@@ -2,9 +2,10 @@ import { appendFile, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { usageDirectory } from "../config.js";
 import type { TokenTotals, TokenUsageRecord } from "../types.js";
+import { matchesUsage, usageScope, type UsageScope } from "../account-identity.js";
 import { accumulate, emptyTotals } from "./collector.js";
 import { withLedgerLock } from "../history.js";
-import { ledgerDateMatches } from "./ledger-date.js";
+import { validUsageRecord } from "./record.js";
 import { usageIdentity } from "./identity.js";
 import { isUsageDeleted } from "../history.js";
 
@@ -46,7 +47,8 @@ export async function appendUsage(record: TokenUsageRecord): Promise<boolean> {
   });
 }
 
-export async function readDailyUsage(day = localDate(Date.now()), accountId?: string | null): Promise<TokenTotals> {
+export async function readDailyUsage(day = localDate(Date.now()), selection?: UsageScope | string | null): Promise<TokenTotals> {
+  const scope = usageScope(selection);
   return withLedgerLock(async () => {
     const midnight = Date.parse(`${day}T00:00:00Z`);
     if (!Number.isFinite(midnight)) return emptyTotals();
@@ -65,10 +67,8 @@ export async function readDailyUsage(day = localDate(Date.now()), accountId?: st
         if (!line) continue;
         try {
           const record = JSON.parse(line) as TokenUsageRecord;
-          if (typeof record.timestamp !== "number" || !ledgerDateMatches(record.timestamp, fileDay) || localDate(record.timestamp) !== day
-            || ![record.input, record.output, record.reasoning, record.cacheRead, record.cacheWrite, record.totalTokens].every(Number.isFinite)) continue;
-          if (record.provider === "openai-codex" && accountId !== undefined
-            && (accountId === null ? record.accountId !== undefined : record.accountId !== accountId)) continue;
+          if (!validUsageRecord(record, fileDay) || localDate(record.timestamp) !== day) continue;
+          if (!matchesUsage(record, scope)) continue;
           totals = accumulate(totals, record);
         } catch { /* Ignore malformed rows as before. */ }
       }

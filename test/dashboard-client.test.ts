@@ -18,6 +18,8 @@ async function mount(state = dashboardFixture(), initiallyHidden = false, withEn
   Object.defineProperty(dom.window.document, "hidden", { configurable: true, get: () => hidden });
   const fetch = vi.fn(async (_url: string, init?: RequestInit) => new Response(JSON.stringify(init?.method === "POST" ? { ok: true } : state)));
   dom.window.fetch = fetch;
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; this.dispatchEvent(new dom.window.Event("close")); };
   // The production poll is tested explicitly, without leaving real timers running.
   let intervalId = 0;
   dom.window.setInterval = vi.fn(() => ++intervalId);
@@ -33,6 +35,122 @@ async function mount(state = dashboardFixture(), initiallyHidden = false, withEn
   return { dom, get, state, fetch, setHidden, reload: () => dom.window.eval("load()") as Promise<boolean> };
 }
 
+it("puts matching account controls in each supported card and the statistics scope in the overview's card header", async () => {
+  const { get, dom } = await mount(multiAccountFixture(), false, true);
+  expect(dom.window.document.querySelector(".app-header .account-menu")).toBeNull();
+  expect(dom.window.document.querySelectorAll(".account-menu")).toHaveLength(3);
+  for (const [prefix, provider, label] of [["codex", "openai-codex", "Codex"], ["claude", "anthropic", "Claude"], ["grok", "xai", "Grok"]]) {
+    const menu = get(`${prefix}-account-menu`);
+    expect(get(`${prefix}-card`).querySelector(".provider-heading")?.contains(menu)).toBe(true);
+    expect(menu.dataset.provider).toBe(provider);
+    expect(menu.querySelector("summary")?.getAttribute("aria-label")).toBe(`管理 ${label} 账号`);
+    expect([...menu.querySelectorAll("button")].map((b) => b.dataset.accountAction)).toEqual(["switch", "add", "manage", "history"]);
+  }
+  expect(get("agy-card").querySelector(".account-menu")).toBeNull();
+  expect(get("overview-tokens").closest(".usage-panel")?.querySelector(".overview-card-header")?.contains(get("usage-account"))).toBe(true);
+  expect(get<HTMLSelectElement>("usage-account").labels?.[0].textContent).toBe("统计范围");
+  expect(css).toContain(".account-menu>summary,.provider-heading .info-help>summary,.ledger-filter select{");
+});
+
+it.each([false, true])("dismisses scoped menus accessibly, with enhancements=%s", async (enhanced) => {
+  const { get, dom } = await mount(multiAccountFixture(), false, enhanced);
+  const codex = get<HTMLDetailsElement>("codex-account-menu"), claude = get<HTMLDetailsElement>("claude-account-menu");
+  codex.querySelector<HTMLElement>("summary")!.click(); expect(codex.open).toBe(true);
+  claude.querySelector<HTMLElement>("summary")!.click(); expect(codex.open).toBe(false); expect(claude.open).toBe(true);
+  get("claude-account-manage").focus();
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape" }));
+  expect(claude.open).toBe(false); expect(dom.window.document.activeElement).toBe(claude.querySelector("summary"));
+  claude.open = true; get("claude-account-manage").click();
+  expect(claude.open).toBe(false); expect(get<HTMLDialogElement>("account-manage-dialog").open).toBe(true);
+  get<HTMLDialogElement>("account-manage-dialog").close();
+  expect(dom.window.document.activeElement).toBe(claude.querySelector("summary"));
+  codex.open = true; get("overview-title").click(); expect(codex.open).toBe(false);
+});
+
+it("filters profiles, remarks and reset targets by the card, without carrying another provider's drafts", async () => {
+  const { get, dom, reload } = await mount(multiAccountFixture());
+  get("claude-account-manage").click();
+  expect([...get<HTMLSelectElement>("account-manage-profile").options].map((o) => o.value)).toEqual(["anthropic/same", "anthropic/backup"]);
+  for (const id of ["account-note-target", "account-reset-profile"]) {
+    expect([...get<HTMLSelectElement>(id).options].map((o) => o.value)).toEqual([`account:${"b".repeat(64)}`, `account:${"c".repeat(64)}`]);
+  }
+  expect(get<HTMLButtonElement>("account-delete").disabled).toBe(true);
+  get<HTMLSelectElement>("account-manage-profile").value = "anthropic/backup";
+  get("account-manage-profile").dispatchEvent(new dom.window.Event("change"));
+  expect(get<HTMLButtonElement>("account-delete").disabled).toBe(false);
+  get<HTMLInputElement>("account-note").value = "Claude 草稿"; get("account-note").dispatchEvent(new dom.window.Event("input"));
+  get<HTMLInputElement>("account-import-path").value = "/private/claude.json";
+  await reload(); expect(get<HTMLInputElement>("account-note").value).toBe("Claude 草稿");
+  get<HTMLDialogElement>("account-manage-dialog").close(); get("codex-account-manage").click();
+  expect([...get<HTMLSelectElement>("account-manage-profile").options].map((o) => o.value)).toEqual(["openai-codex/same"]);
+  expect(get<HTMLInputElement>("account-note").value).toBe("工作号");
+  expect(get<HTMLInputElement>("account-import-path").value).toBe("");
+  get<HTMLDialogElement>("account-manage-dialog").close(); get("grok-account-manage").click();
+  expect(get<HTMLSelectElement>("account-manage-profile").options).toHaveLength(0);
+  expect(get<HTMLInputElement>("account-note").value).toBe("");
+  expect(get<HTMLButtonElement>("account-note-submit").disabled).toBe(true);
+  expect(get<HTMLButtonElement>("account-reset-usage").disabled).toBe(true);
+  expect(get<HTMLButtonElement>("grok-account-use").disabled).toBe(true);
+  expect(get<HTMLButtonElement>("claude-account-use").disabled).toBe(false);
+});
+
+it.each([["codex", "openai-codex"], ["claude", "anthropic"], ["grok", "xai"]])("saves only the %s card's provider and keeps its login instruction fixed", async (prefix, provider) => {
+  const { get, dom, fetch } = await mount(multiAccountFixture());
+  get(`${prefix}-account-add`).click();
+  expect(get("account-login-command").textContent).toBe(`/login ${provider}`);
+  expect(dom.window.document.getElementById("account-provider")).toBeNull();
+  get<HTMLInputElement>("account-name").value = "local-profile";
+  get("account-save-form").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/account-command" && init?.body === JSON.stringify({ command: "save", args: `${provider} local-profile` }))).toBe(true));
+  expect(get<HTMLSelectElement>("usage-account").value).toBe("all");
+});
+
+it("imports and deletes only profiles belonging to the chosen card", async () => {
+  const { get, dom, fetch } = await mount(multiAccountFixture());
+  get("grok-account-add").click();
+  get<HTMLInputElement>("account-import-name").value = "work";
+  get<HTMLInputElement>("account-import-path").value = "/private/grok.json";
+  get("account-import-form").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.body === JSON.stringify({ command: "import", args: "xai work /private/grok.json" }))).toBe(true));
+  await vi.waitFor(() => expect(get<HTMLButtonElement>("claude-account-manage").disabled).toBe(false));
+  get("claude-account-manage").click(); dom.window.confirm = () => true;
+  get<HTMLSelectElement>("account-manage-profile").value = "anthropic/backup";
+  get("account-manage-profile").dispatchEvent(new dom.window.Event("change")); get("account-delete").click();
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.body === JSON.stringify({ command: "delete", args: "anthropic backup" }))).toBe(true));
+});
+
+it("rejects injected cross-provider profile, remark and reset targets before sending any command", async () => {
+  const { get, dom, fetch } = await mount(multiAccountFixture());
+  get("claude-account-manage").click(); dom.window.confirm = () => true;
+  for (const id of ["account-switch-profile", "account-manage-profile", "account-note-target", "account-reset-profile"]) {
+    const select = get<HTMLSelectElement>(id), value = id.endsWith("profile") && id !== "account-reset-profile" ? "openai-codex/same" : `account:${"a".repeat(64)}`;
+    select.add(new dom.window.Option("foreign account", value)); select.value = value;
+  }
+  get<HTMLInputElement>("account-note").value = "foreign note";
+  get("account-note-form").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  for (const id of ["account-switch-confirm", "account-delete", "account-reset-usage"]) { get<HTMLButtonElement>(id).disabled = false; get(id).click(); }
+  expect(fetch.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+});
+
+it("explicitly scopes legacy Codex profiles and retains complete, clearly labeled backups", async () => {
+  const { get, dom, fetch } = await mount(); dom.window.confirm = () => true;
+  get("codex-account-use").click();
+  get<HTMLSelectElement>("account-switch-profile").value = "personal-plus"; get("account-switch-confirm").click();
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.body === JSON.stringify({ command: "use", args: "openai-codex personal-plus" }))).toBe(true));
+  await vi.waitFor(() => expect(get<HTMLButtonElement>("claude-account-history").disabled).toBe(false));
+  get("claude-account-history").click();
+  expect(get("account-history-dialog").textContent).toContain("备份与恢复包含所有服务");
+  get("account-backup-create").click();
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.body === JSON.stringify({ command: "backup", args: "" }))).toBe(true));
+});
+
+it("returns focus to settings if a modal's owning card is hidden during a poll", async () => {
+  const { get, state, reload, dom } = await mount(multiAccountFixture());
+  get("claude-account-manage").click(); state.config.showClaudeCard = false; await reload();
+  get<HTMLDialogElement>("account-manage-dialog").close();
+  expect(dom.window.document.activeElement).toBe(get("settings").querySelector("summary"));
+});
+
 it("formats finite numeric money as before and rejects non-numeric or non-finite values", async () => {
   const { dom } = await mount();
   for (const expression of ["undefined", "null", "'1.2'", "NaN", "Infinity", "-Infinity", "{ toFixed() { throw Error('invalid'); } }"]) {
@@ -44,19 +162,22 @@ it("formats finite numeric money as before and rejects non-numeric or non-finite
   expect(dom.window.eval("money(-1)")).toBe("$-1.0000");
 });
 
-it("shows desktop quota cards with their own statusbar switches", async () => {
+it("keeps independent card and Pi statusbar switches in settings, available even when cards are hidden", async () => {
   const { get } = await mount();
-  for (const [title, id] of [["codex-title", "show-oai"], ["claude-title", "show-claude"], ["grok-title", "show-grok"], ["agy-title", "show-agy"]]) {
-    const card = get(title).closest(".provider-card")!;
-    const switchInput = get<HTMLInputElement>(id);
-    expect(card.contains(switchInput)).toBe(true);
-    expect(switchInput.closest("label")?.textContent).toContain("状态栏显示");
-    expect(switchInput.getAttribute("role")).toBe("switch");
-    expect(switchInput.nextElementSibling?.classList.contains("switch-track")).toBe(true);
-    expect(switchInput.checked).toBe(true);
-    expect(get("settings").contains(switchInput)).toBe(false);
+  for (const [prefix, id] of [["codex", "show-oai"], ["claude", "show-claude"], ["grok", "show-grok"], ["agy", "show-agy"]]) {
+    const card = get(`${prefix}-card`), switchInput = get<HTMLInputElement>(id), cardInput = get<HTMLInputElement>(`show-${prefix}-card`);
+    expect(card.contains(switchInput)).toBe(false);
+    expect(switchInput.closest("label")?.textContent).toContain("Pi 状态栏显示");
+    for (const input of [switchInput, cardInput]) {
+      expect(input.getAttribute("role")).toBe("switch");
+      expect(input.nextElementSibling?.classList.contains("switch-track")).toBe(true);
+      expect(input.checked).toBe(true);
+      expect(get("settings").contains(input)).toBe(true);
+    }
+    expect(card.hidden).toBe(false);
   }
-  expect(css).toMatch(/\.provider-grid\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/);
+  expect(get("provider-grid").style.getPropertyValue("--provider-columns")).toBe("4");
+  expect(css).toContain("grid-template-columns:repeat(var(--provider-columns,4),minmax(0,1fr))");
   expect(css).toMatch(/\.switch-input:checked\s*\+\s*\.switch-track/);
   expect(css).toMatch(/\.switch-input:focus-visible\s*\+\s*\.switch-track/);
 });
@@ -139,7 +260,7 @@ it("keeps additional model groups compact without hiding their quota summary", a
   expect(updated.querySelector("details")!.open).toBe(true);
 });
 
-it("follows a successful account switch instead of staying on the old account's historical ledger", async () => {
+it("keeps the selected ledger independent of a successful login switch", async () => {
   const { get, dom, fetch, reload } = await mount();
   const changed = dashboardFixture();
   changed.currentAccountId = "account:plus";
@@ -148,10 +269,10 @@ it("follows a successful account switch instead of staying on the old account's 
     selectedAccountId: String(url).includes("account%3Apro") ? "account:pro" : "account:plus",
   })));
   await reload();
-  expect(get<HTMLSelectElement>("usage-account").value).toBe("account:plus");
-  expect(get("account-current").textContent).toBe("personal-plus");
+  expect(get<HTMLSelectElement>("usage-account").value).toBe("account:pro");
+  expect(get("codex-account-current").textContent).toBe("个人账号");
   expect(fetch.mock.calls.some(([url]) => String(url).includes("account%3Apro"))).toBe(true);
-  expect(fetch.mock.calls.at(-1)?.[0]).toBe("/api/state");
+  expect(fetch.mock.calls.at(-1)?.[0]).toBe("/api/state?account=account%3Apro");
   // A deliberate historical selection remains pinned across subsequent polls.
   get<HTMLSelectElement>("usage-account").value = "account:pro";
   get("usage-account").dispatchEvent(new dom.window.Event("change"));
@@ -213,7 +334,7 @@ it("confirms and deletes the selected provider/model row, then refreshes totals 
   expect(button.getAttribute("aria-label")).toContain("openai-codex / gpt-6-sol");
   const initialRequests = fetch.mock.calls.length;
   button.click();
-  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("此账号视图中 openai-codex / gpt-6-sol"));
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("工作账号中 openai-codex / gpt-6-sol"));
   expect(fetch.mock.calls.length).toBe(initialRequests);
   confirm.mockReturnValue(true);
   fetch.mockImplementation(async (_url: string, init?: RequestInit) => {
@@ -665,22 +786,28 @@ it("keeps login and unavailable-estimate notices in collapsed help", async () =>
   expect(remove.getAttribute("aria-label")).toContain("删除 openai-codex / gpt-6-sol");
 });
 
-it("selects a ledger from the account menu without switching the logged-in account", async () => {
+it("filters the ledger from the overview, without coupling account management or moving keyboard focus", async () => {
   const { get, dom, state, fetch } = await mount(dashboardFixture(), false, true);
-  const menu = get<HTMLDetailsElement>("account-menu");
-  expect(menu.contains(get("usage-account"))).toBe(true);
-  expect(menu.contains(get("account-use"))).toBe(true);
-  expect(get("account-selection").textContent).toBe("工作账号");
+  const menu = get<HTMLDetailsElement>("codex-account-menu");
+  expect(menu.contains(get("usage-account"))).toBe(false);
+  const overview = get("overview-tokens").closest(".usage-panel")!;
+  expect(overview.querySelector(".overview-card-header")?.contains(get("usage-account"))).toBe(true);
+  expect(get("overview-title").closest(".section-heading")?.contains(get("usage-account"))).toBe(false);
+  expect(menu.contains(get("codex-account-use"))).toBe(true);
+  expect(get("codex-card").contains(menu)).toBe(true);
+  expect(dom.window.document.querySelector(".app-header .account-menu")).toBeNull();
+  expect(get("ledger-selection").textContent).toBe("工作账号");
   menu.open = true;
   fetch.mockImplementation(async (url: string) => new Response(JSON.stringify({ ...state,
     selectedAccountId: new URL(url, "http://127.0.0.1").searchParams.get("account") || state.currentAccountId,
   })));
   get<HTMLSelectElement>("usage-account").value = "all";
+  get("usage-account").focus();
   get("usage-account").dispatchEvent(new dom.window.Event("change"));
-  await vi.waitFor(() => expect(get("account-selection").textContent).toBe("总量"));
-  expect(menu.open).toBe(false);
-  expect(dom.window.document.activeElement).toBe(menu.querySelector("summary"));
-  expect(get("account-current").textContent).toBe("work-pro");
+  await vi.waitFor(() => expect(get("ledger-selection").textContent).toBe("总体用量"));
+  expect(menu.open).toBe(true);
+  expect(dom.window.document.activeElement).toBe(get("usage-account"));
+  expect(get("codex-account-current").textContent).toBe("工作账号");
   expect(get("codex-windows").querySelector(".gauge-num")).toBeNull();
   expect(get("codex-windows").querySelector(".gauge-val")?.textContent).toContain("—");
   expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
@@ -729,7 +856,7 @@ it.each(["hours", "days"] as const)("compares model totals within the %s range a
   state.selectedAccountId = "all";
   state.usage.timeline[period] = [];
   await reload();
-  expect(get("account-selection").textContent).toBe("总量");
+  expect(get("ledger-selection").textContent).toBe("总体用量");
   expect(get("model-comparison-empty").hidden).toBe(false);
   expect(get("model-comparison-total").textContent).toBe("—");
   expect(list.children).toHaveLength(0);
@@ -760,4 +887,164 @@ it("distinguishes unpriced, partially priced, and zero-cost models in comparison
   get("model-comparison-metric").dispatchEvent(new dom.window.Event("change"));
   expect(get("model-comparison-total").textContent).toBe("900");
   expect(list.querySelector(".comparison-model-value")?.textContent).toBe("900");
+});
+
+it("persists hidden cards without changing the ledger or Pi statusbar controls, and restores them on demand", async () => {
+  const { state, get, dom, fetch, reload } = await mount(dashboardFixture(), false, true);
+  const selected = get<HTMLSelectElement>("usage-account").value, total = get("overview-tokens").textContent;
+  fetch.mockImplementation(async (_url, init) => {
+    if (init?.method === "POST") Object.assign(state.config, JSON.parse(init.body as string));
+    return new Response(JSON.stringify(init?.method === "POST" ? { ok: true } : state));
+  });
+  get<HTMLInputElement>("show-claude-card").checked = false;
+  get("show-claude-card").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(get("claude-card").hidden).toBe(true));
+  await vi.waitFor(() => expect(get<HTMLInputElement>("show-claude-card").disabled).toBe(false));
+  expect(fetch).toHaveBeenCalledWith("/api/cards", expect.objectContaining({ body: JSON.stringify({ showClaudeCard: false }) }));
+  expect(get("provider-grid").style.getPropertyValue("--provider-columns")).toBe("3");
+  expect(get<HTMLInputElement>("show-claude").checked).toBe(true);
+  expect(get<HTMLInputElement>("show-claude").disabled).toBe(false);
+  expect(get<HTMLSelectElement>("usage-account").value).toBe(selected);
+  expect(get("overview-tokens").textContent).toBe(total);
+  expect(fetch.mock.calls.some(([url]) => ["/api/statusbar", "/api/refresh", "/api/account-command"].includes(String(url)))).toBe(false);
+  await reload(); expect(get("claude-card").hidden).toBe(true);
+  get<HTMLInputElement>("show-claude-card").checked = true;
+  get("show-claude-card").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(get("claude-card").hidden).toBe(false));
+});
+
+it("can hide every quota card while keeping settings, statistics and an accessible recovery message", async () => {
+  const state = dashboardFixture();
+  Object.assign(state.config, { showCodexCard: false, showClaudeCard: false, showGrokCard: false, showAgyCard: false });
+  state.claude = { error: "Not logged in" };
+  const { get } = await mount(state);
+  for (const prefix of ["codex", "claude", "grok", "agy"]) {
+    expect(get(`${prefix}-card`).hidden).toBe(true);
+    expect(get<HTMLInputElement>(`show-${prefix}-card`).checked).toBe(false);
+    expect(get("settings").contains(get(`show-${prefix}-card`))).toBe(true);
+  }
+  expect(get("quota-empty-state").hidden).toBe(false);
+  expect(get("quota-empty-state").textContent).toContain("状态与设置");
+  expect(get("overview-tokens").textContent).toBe("2,480,000");
+  expect(get("claude-query-status").textContent).toContain("Not logged in");
+});
+
+it("restores the previous card switch on save failures and retains successful saves when the following state read fails", async () => {
+  const { get, dom, fetch } = await mount();
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: "保存失败" }), { status: 500 }));
+  get<HTMLInputElement>("show-codex-card").checked = false;
+  get("show-codex-card").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(get("feedback").textContent).toContain("保存失败"));
+  expect(get<HTMLInputElement>("show-codex-card").checked).toBe(true);
+  expect(get("codex-card").hidden).toBe(false);
+  fetch.mockImplementation(async (_url, init) => {
+    if (init?.method === "POST") return new Response(JSON.stringify({ ok: true }));
+    throw new Error("读取失败");
+  });
+  get<HTMLInputElement>("show-codex-card").checked = false;
+  get("show-codex-card").dispatchEvent(new dom.window.Event("change"));
+  await vi.waitFor(() => expect(get("connection-status").dataset.state).toBe("offline"));
+  await vi.waitFor(() => expect(get<HTMLInputElement>("show-codex-card").disabled).toBe(false));
+  expect(get<HTMLInputElement>("show-codex-card").checked).toBe(false);
+  expect(get("codex-card").hidden).toBe(true);
+});
+
+it("shows each service's current account directly on the card, independent of ledger filtering", async () => {
+  const state = multiAccountFixture(), id = `account:${"d".repeat(64)}`;
+  state.currentAccounts!.xai = { id, name: "Grok · 个人账号", current: true };
+  state.quotaAccounts!.xai = { ...state.currentAccounts!.xai };
+  state.selectedAccountId = `account:${"c".repeat(64)}`;
+  const { get } = await mount(state);
+  expect(get("codex-account").textContent).toBe("当前账号：Codex · 工作号");
+  expect(get("claude-account").textContent).toBe("当前账号：Claude · shared@example.com");
+  expect(get("grok-account").textContent).toBe("当前账号：Grok · 个人账号");
+  for (const prefix of ["codex", "claude", "grok"]) expect(get(`${prefix}-account`).closest("details")).toBeNull();
+  expect(get("codex-card").contains(get("codex-account-menu"))).toBe(true);
+  expect(get("ledger-selection").textContent).toContain("备用号");
+});
+
+it("uses a slow connected-state breathing indicator and respects reduced-motion preferences", async () => {
+  const { get } = await mount();
+  expect(get("connection-status").getAttribute("aria-label")).toBe("本地已连接");
+  expect(css).toMatch(/\.connection-status\[data-state=connected\]::before\{[^}]*animation:connection-breathe 2\.8s ease-in-out infinite/);
+  expect(css).toContain("@keyframes connection-breathe");
+  expect(css).toMatch(/@media\(prefers-reduced-motion:reduce\)[\s\S]*?animation:none!important/);
+});
+
+function multiAccountFixture() {
+  const state = dashboardFixture(), codexKey = "a".repeat(64), claudeKey = "b".repeat(64), backupKey = "c".repeat(64);
+  state.accounts = [{ id: "all", name: "总体用量" },
+    { id: `account:${codexKey}`, key: codexKey, provider: "openai-codex", name: "Codex · 工作号", note: "工作号", active: true },
+    { id: `account:${claudeKey}`, key: claudeKey, provider: "anthropic", name: "Claude · shared@example.com", email: "shared@example.com", active: true },
+    { id: `account:${backupKey}`, key: backupKey, provider: "anthropic", name: "Claude · 备用号", note: "备用号", active: false }];
+  state.profiles = [{ name: "same", provider: "openai-codex", key: codexKey, displayName: "Codex · 工作号", current: true },
+    { name: "same", provider: "anthropic", key: claudeKey, displayName: "Claude · shared@example.com", current: true },
+    { name: "backup", provider: "anthropic", key: backupKey, displayName: "Claude · 备用号", current: false }];
+  state.currentAccounts = { "openai-codex": { id: `account:${codexKey}`, name: "Codex · 工作号", profile: "same", current: true },
+    anthropic: { id: `account:${claudeKey}`, name: "Claude · shared@example.com", profile: "same", current: true } };
+  state.quotaAccounts = { ...state.currentAccounts };
+  state.selectedAccountId = "all";
+  return state;
+}
+
+it("shows per-provider current accounts and current quota in totals, and switches only the selected provider", async () => {
+  const { get, dom, fetch } = await mount(multiAccountFixture());
+  expect(get("codex-account-current").textContent).toBe("Codex · 工作号");
+  expect(get("claude-account-current").textContent).toBe("Claude · shared@example.com");
+  expect(get("codex-windows").querySelector("meter")?.value).toBe(61);
+  expect(get("codex-plan").textContent).toContain("Codex · 工作号");
+  expect(get("claude-plan").textContent).toContain("Claude · shared@example.com");
+  expect(get("codex-account").textContent).toBe("当前账号：Codex · 工作号");
+  expect(get("claude-account").textContent).toBe("当前账号：Claude · shared@example.com");
+  expect(get("codex-quota-account").hidden).toBe(true);
+  expect(get("claude-quota-account").hidden).toBe(true);
+  get("claude-account-use").click();
+  const select = get<HTMLSelectElement>("account-switch-profile");
+  expect([...select.options].map((o) => o.value)).toEqual(["anthropic/same", "anthropic/backup"]);
+  expect(get("account-switch-title").textContent).toBe("Claude · 切换账号");
+  dom.window.confirm = () => true;
+  dom.window.HTMLDialogElement.prototype.close = () => {};
+  select.value = "anthropic/backup";
+  get("account-switch-confirm").click();
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/account-command" && init?.body === JSON.stringify({ command: "use", args: "anthropic backup" }))).toBe(true));
+  expect(get<HTMLSelectElement>("usage-account").value).toBe("all");
+  await vi.waitFor(() => expect(get("account-feedback").textContent).toContain("模型及账本筛选均不变"));
+});
+
+it("edits stable account remarks, preserves drafts during polls and updates labels after a rename", async () => {
+  const { get, dom, fetch, state, reload } = await mount(multiAccountFixture());
+  get("claude-account-manage").click();
+  const target = get<HTMLSelectElement>("account-note-target"), input = get<HTMLInputElement>("account-note");
+  target.value = `account:${"b".repeat(64)}`; target.dispatchEvent(new dom.window.Event("change"));
+  expect(input.value).toBe("");
+  input.value = "备用订阅 <script>"; input.dispatchEvent(new dom.window.Event("input"));
+  await reload(); expect(input.value).toBe("备用订阅 <script>");
+  get("account-note-form").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/account-command" && init?.body === JSON.stringify({ command: "note", args: `anthropic account:${"b".repeat(64)} 备用订阅 <script>` }))).toBe(true));
+  state.accounts![2].name = "Claude · 备用订阅 <script>"; state.accounts![2].note = "备用订阅 <script>";
+  await reload();
+  expect(get<HTMLSelectElement>("usage-account").options[2].textContent).toBe("Claude · 备用订阅 <script>");
+  expect(dom.window.document.querySelector("script:not([src])")).toBeNull();
+  expect(input.value).toBe("备用订阅 <script>");
+});
+
+it("labels historical quota as non-realtime and lets retained historical identities reset usage without a profile", async () => {
+  const state = multiAccountFixture();
+  state.selectedAccountId = `account:${"c".repeat(64)}`;
+  state.claude.historical = true; state.claude.restored = true;
+  state.quotaAccounts!.anthropic = { id: state.selectedAccountId, name: "Claude · 备用号", current: false };
+  state.profiles = [];
+  const { get, dom, fetch } = await mount(state);
+  expect(get("claude-plan").textContent).toContain("历史读数（非实时）");
+  expect(get("claude-account").textContent).toContain("当前账号：Claude · shared@example.com");
+  expect(get("claude-quota-account").hidden).toBe(false);
+  expect(get("claude-quota-account").textContent).toContain("额度账号：Claude · 备用号 · 历史读数（非实时）");
+  expect(get("claude-account").closest("details")).toBeNull();
+  expect(get("claude-success").textContent).toContain("历史读数时间");
+  expect(get("claude-error").textContent).not.toContain("后台正在刷新");
+  get("claude-account-history").click();
+  expect(get<HTMLButtonElement>("account-reset-usage").disabled).toBe(false);
+  get<HTMLSelectElement>("account-reset-profile").value = state.selectedAccountId;
+  dom.window.confirm = () => true; get("account-reset-usage").click();
+  await vi.waitFor(() => expect(fetch.mock.calls.some(([url, init]) => url === "/api/account-command" && init?.body === JSON.stringify({ command: "reset-usage", args: `anthropic ${state.selectedAccountId}` }))).toBe(true));
 });

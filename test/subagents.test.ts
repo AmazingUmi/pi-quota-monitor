@@ -38,6 +38,36 @@ it("reconciles child RPC usage without counting parent total or duplicating repe
   expect(seen).toHaveLength(2); // The ledger, not an RPC snapshot, deduplicates across restarts.
 });
 
+it("uses only a child's own request metadata and does not reuse it for later unverified turns", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "child-identity-")); paths.push(dir);
+  const file = join(dir, "child.jsonl");
+  const turn = (timestamp: number) => ({ type: "message", message: { role: "assistant", timestamp,
+    provider: "anthropic", model: "claude-sonnet-4-6", usage: { input: 10, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 13 } } });
+  await writeFile(file, [
+    { type: "custom", customType: "quota-monitor:request-account", data: { provider: "anthropic", accountId: "child-account", authType: "oauth" } },
+    turn(1), turn(2),
+    { type: "custom", customType: "quota-monitor:request-account", data: { provider: "anthropic", accountId: "must-not-attribute", authType: "api-key" } },
+    turn(3),
+  ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const rows = await childRecords({ sessionFile: file });
+  expect(rows.map((r) => r.accountId)).toEqual(["child-account", undefined, undefined]);
+  expect(rows.map((r) => r.authType)).toEqual(["oauth", "unknown", "api-key"]);
+  expect(rows[0].accountKey).toMatch(/^[a-f0-9]{64}$/);
+});
+
+it("matches timestamped child receipts even when written after messages, without leaking identity to another turn", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "child-receipt-")); paths.push(dir);
+  const file = join(dir, "child.jsonl");
+  const turn = (timestamp: number) => ({ type: "message", message: { role: "assistant", timestamp,
+    provider: "xai", model: "grok-4.3", usage: { input: 10, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 13 } } });
+  await writeFile(file, [turn(1), turn(2),
+    { type: "custom", customType: "quota-monitor:request-account", data: { provider: "xai", model: "grok-4.3", timestamp: 2, accountId: "child-2", authType: "oauth" } },
+    { type: "custom", customType: "quota-monitor:request-account", data: { provider: "xai", model: "grok-4.3", timestamp: 1, accountId: "child-1", authType: "oauth" } },
+    turn(3),
+  ].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  expect((await childRecords({ sessionFile: file })).map((r) => r.accountId)).toEqual(["child-1", "child-2", undefined]);
+});
+
 it("retains CLI child totals without inventing a model price", async () => {
   const listeners = new Map<string, (value: unknown) => void>();
   const pi = { events: {

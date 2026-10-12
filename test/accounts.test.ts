@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { activeAccountId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "../src/accounts.js";
+import { activeAccountId, accountViewId, deleteAccount, importAccount, listAccounts, saveAccount, useAccount } from "../src/accounts.js";
 import { backupHistory, importHistory, resetAccountUsage } from "../src/history.js";
 import { UsageAggregator } from "../src/tokens/aggregate.js";
 import { QuotaReadings } from "../src/quota-readings.js";
@@ -288,7 +288,7 @@ it("attributes usage to the account captured at request time, not after a switch
     modelRegistry: { getProvider: () => undefined, getProviderAuth: async () => undefined, getApiKeyForProvider: async () => undefined },
   } as unknown as ExtensionContext;
   await handlers.get("session_start")?.({}, ctx);
-  await handlers.get("before_provider_headers")?.({ headers: {} }, ctx);
+  await handlers.get("before_provider_headers")?.({ headers: { Authorization: "Bearer access-pro-id" } }, ctx);
   await writeFile(authPath, JSON.stringify({ "openai-codex": auth("plus-id") }));
   await handlers.get("message_end")?.({ message: { role: "assistant", provider: "openai-codex", model: "gpt-6-sol", timestamp: Date.now(), stopReason: "stop",
     usage: { input: 100, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 110 } } }, ctx);
@@ -316,7 +316,7 @@ it("discards an in-flight quota result from the previous account and re-queries 
     ui: { setStatus: (_key: string, status?: string) => { if (status) statuses.push(status); }, notify: vi.fn() },
     sessionManager: { getBranch: () => [] },
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }),
-      getProviderAuth: async () => ({ auth: { apiKey: `token-${activeAccountId()}` } }), getApiKeyForProvider: async () => undefined },
+      getProviderAuth: async () => ({ auth: { apiKey: `access-${activeAccountId()}` } }), getApiKeyForProvider: async () => undefined },
   } as unknown as ExtensionContext;
   try {
     await handlers.get("session_start")?.({}, ctx);
@@ -358,7 +358,8 @@ it("reports the active auth account name in the console without current.json", a
     await consoleCommand("", ctx);
     const data = await (await fetch(`${url}/api/state`)).json() as { currentProfile?: string; selectedAccountId: string; accounts: Array<{ id: string; name: string }> };
     expect(data.currentProfile).toBe("obr");
-    expect(data.accounts.find((item) => item.id === data.selectedAccountId)?.name).toBe("obr");
+    expect(data.selectedAccountId).toBe("all");
+    expect(data.accounts.find((item) => item.id === accountViewId("openai-codex", "obr-id"))?.name).toContain("Codex · 账号");
   } finally { await handlers.get("session_shutdown")?.({}, ctx); }
 });
 
@@ -428,7 +429,7 @@ it("keeps the console open and discovers an imported profile on the next state r
   try {
     await commands.get("quota-console")?.("", ctx);
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    const before = await (await fetch(`${url}/api/state`)).json() as { profiles: Array<{ name: string }>; usage: { records: number; pricing: { estimatedCostUsd: number }; timeline: { days: Array<{ estimatedCostUsd: number }> } } };
+    const before = await (await fetch(`${url}/api/state?account=account%3Apro-id`)).json() as { profiles: Array<{ name: string }>; usage: { records: number; pricing: { estimatedCostUsd: number }; timeline: { days: Array<{ estimatedCostUsd: number }> } } };
     expect(before.profiles.map((p) => p.name)).toEqual(["pro"]);
     expect(before.usage.records).toBe(1);
     const path = join(dir, "plus OAuth.json");
@@ -451,7 +452,7 @@ it("keeps quota amount estimates bound to the active account when viewing totals
   await writeFile(plusPath, JSON.stringify(auth("plus-id")));
   await importAccount("plus", plusPath);
   await writeFile(join(dir, "pi-quota-monitor", `usage-${localDate(Date.now())}.jsonl`),
-    [record("pro-id"), record("plus-id"), record("plus-id"), record()].map((item) => JSON.stringify(item) + "\n").join(""));
+    [record("pro-id"), record("plus-id"), record("plus-id"), { ...record(), timestamp: Date.now() - 120_000 }].map((item) => JSON.stringify(item) + "\n").join(""));
   await new QuotaReadings("codex", "pro-id", join(dir, "pi-quota-monitor")).append({
     capturedAt: Date.now() - 60_000, plan: "pro", weekly: { label: "weekly", remainingPercent: 60, resetAt: Math.ceil((Date.now() + 86_400_000) / 1000) * 1000 },
   });
@@ -471,7 +472,7 @@ it("keeps quota amount estimates bound to the active account when viewing totals
     hasUI: true, mode: "rpc", ui: { setStatus() {}, notify: (message: string) => { url = message.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] ?? url; } },
     sessionManager: { getBranch: () => [] }, getContextUsage: () => undefined,
     modelRegistry: { getProvider: () => ({ baseUrl: "https://chatgpt.com/backend-api" }),
-      getProviderAuth: async () => ({ auth: { apiKey: "test-only" } }), getApiKeyForProvider: async () => undefined },
+      getProviderAuth: async () => ({ auth: { apiKey: "access-pro-id" } }), getApiKeyForProvider: async () => undefined },
   } as unknown as ExtensionContext;
   try {
     await handlers.get("session_start")?.({}, ctx);
@@ -484,7 +485,7 @@ it("keeps quota amount estimates bound to the active account when viewing totals
     const pro = await load("account%3Apro-id");
     const plus = await load("account%3Aplus-id");
     const all = await load("all");
-    expect(initial.selectedAccountId).toBe("account:pro-id");
+    expect(initial.selectedAccountId).toBe("all");
     expect(pro.usage.records).toBe(1);
     expect(plus.usage.records).toBe(2);
     expect(all.usage.records).toBe(4);
@@ -493,9 +494,9 @@ it("keeps quota amount estimates bound to the active account when viewing totals
     expect(pro.quotaEstimates.codex.weekly.attribution).toBe("correlated");
     expect(pro.quotaEstimates.codex.weekly.piAttributedPercent).toBeUndefined();
     expect(plus.quotaEstimates.codex.weekly.observedCostUsd).toBeUndefined();
-    expect(all.quotaEstimates.codex.weekly.observedCostUsd).toBeUndefined();
+    expect(all.quotaEstimates.codex.weekly.observedCostUsd).toBeCloseTo(pro.quotaEstimates.codex.weekly.observedCostUsd!);
     expect(plus.codex.value).toBeUndefined();
-    expect(all.codex.value).toBeUndefined();
+    expect(all.codex.value).toBeDefined();
     expect(pro.codex.value).toBeDefined();
   } finally {
     await handlers.get("session_shutdown")?.({}, ctx);

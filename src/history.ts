@@ -3,9 +3,10 @@ import { mkdir, readFile, readdir, writeFile, rename, rm, chmod, lstat, realpath
 import { isAbsolute, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { configDirectory, usageDirectory } from "./config.js";
-import { accountId, credential, listAccounts } from "./accounts.js";
+import { accountId, accountIdentities, credential, knownCredentialAccount, listAllAccounts, mergeAccountIdentities, profilePath, readProfile, storedProfileData, type AccountIdentity, type SavedProfile } from "./accounts.js";
+import { accountKey, accountEmail, displayText, isAccountProvider, matchesUsage, stableAccountId, usageScope, type AccountProvider, type UsageScope } from "./account-identity.js";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
-import { ledgerDateMatches } from "./tokens/ledger-date.js";
+import { validUsageRecord } from "./tokens/record.js";
 import { usageIdentity } from "./tokens/identity.js";
 import type { TokenUsageRecord } from "./types.js";
 
@@ -100,40 +101,34 @@ async function atomic(path: string, text: string): Promise<void> {
 interface Snapshot {
   schema: 1;
   createdAt: string;
-  profiles: Array<{ name: string; credential: Record<string, unknown> }>;
+  profiles: SavedProfile[];
+  accounts?: AccountIdentity[];
   ledgers: Record<string, string>;
   deletedIdentities?: string[];
 }
 function validLine(line: string, filename: string): boolean {
   try {
-    const value: unknown = JSON.parse(line);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const record = value as Record<string, unknown>;
-    const day = filename.slice(6, 16);
-    return typeof record.timestamp === "number" && ledgerDateMatches(record.timestamp, day)
-      && typeof record.provider === "string" && !!record.provider
-      && typeof record.model === "string" && !!record.model
-      && (record.accountId === undefined || accountId(record) !== undefined)
-      && ["input", "output", "reasoning", "cacheRead", "cacheWrite", "totalTokens"]
-        .every((key) => typeof record[key] === "number" && Number.isFinite(record[key]) && (record[key] as number) >= 0);
+    return validUsageRecord(JSON.parse(line), filename.slice(6, 16));
   } catch { return false; }
 }
 function lines(text: string): string[] { return text.split("\n").filter(Boolean); }
-async function snapshot(): Promise<Snapshot> {
-  const { profiles } = await listAccounts();
-  const accounts: Snapshot["profiles"] = [];
-  const active = readStoredCredential("openai-codex");
-  const { current } = await listAccounts();
-  for (const profile of profiles) {
-    const saved = JSON.parse(await readFile(join(configDirectory(), "accounts", `${profile.name}.json`), "utf8")) as Record<string, unknown>;
-    const credential = profile.name === current && accountId(active) === profile.accountId ? active as Record<string, unknown> : saved;
-    accounts.push({ name: profile.name, credential });
+async function snapshot(includeCredentials: boolean): Promise<Snapshot> {
+  const savedProfiles: Snapshot["profiles"] = [];
+  if (includeCredentials) {
+    const { profiles } = await listAllAccounts();
+    for (const profile of profiles) {
+      const saved = await readProfile(profile.name, profile.provider);
+      const active = readStoredCredential(profile.provider);
+      const c = knownCredentialAccount(profile.provider, active) === profile.accountId
+        ? active as Record<string, unknown> : saved.credential;
+      savedProfiles.push({ name: profile.name, provider: profile.provider, accountId: profile.accountId, credential: c });
+    }
   }
   const ledgers: Record<string, string> = {};
   for (const entry of await readdir(usageDirectory(), { withFileTypes: true })) {
     if (entry.isFile() && LEDGER.test(entry.name)) ledgers[entry.name] = await readFile(join(usageDirectory(), entry.name), "utf8");
   }
-  return { schema: 1, createdAt: new Date().toISOString(), profiles: accounts, ledgers,
+  return { schema: 1, createdAt: new Date().toISOString(), profiles: savedProfiles, accounts: accountIdentities(), ledgers,
     deletedIdentities: [...await readUsageDeletions()].sort() };
 }
 async function backupLocation(directory?: string): Promise<string> {
@@ -153,14 +148,14 @@ async function backupLocation(directory?: string): Promise<string> {
   }
   return realpath(directory);
 }
-async function backupUnlocked(directory?: string): Promise<string> {
+async function backupUnlocked(directory?: string, includeCredentials = true): Promise<string> {
   const destination = await backupLocation(directory);
   const path = join(destination, `backup-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}.json`);
-  await atomic(path, JSON.stringify(await snapshot()) + "\n");
+  await atomic(path, JSON.stringify(await snapshot(includeCredentials)) + "\n");
   return path;
 }
-export async function backupHistory(directory?: string): Promise<string> {
-  return withLedgerLock(() => backupUnlocked(directory));
+export async function backupHistory(directory?: string, includeCredentials = true): Promise<string> {
+  return withLedgerLock(() => backupUnlocked(directory, includeCredentials));
 }
 export async function listBackups(): Promise<string[]> {
   await mkdir(backupDir(), { recursive: true, mode: 0o700 });
@@ -173,13 +168,28 @@ function parseSnapshot(data: unknown): Snapshot {
   if (raw.schema !== 1 || !Array.isArray(raw.profiles) || !raw.ledgers || typeof raw.ledgers !== "object" || Array.isArray(raw.ledgers)) throw new Error("Unsupported backup format.");
   const names = new Set<string>();
   for (const profile of raw.profiles) {
-    if (!profile || typeof profile.name !== "string" || !PROFILE.test(profile.name) || profile.name === "current"
-      || names.has(profile.name)) throw new Error("Invalid backup profile.");
-    names.add(profile.name);
-    credential(profile.credential);
+    const provider = profile?.provider ?? "openai-codex";
+    const key = JSON.stringify([provider, profile?.name]);
+    if (!profile || !isAccountProvider(provider) || typeof profile.name !== "string" || !PROFILE.test(profile.name) || profile.name === "current"
+      || names.has(key)) throw new Error("Invalid backup profile.");
+    names.add(key);
+    credential(profile.credential, provider);
+    const id = stableAccountId(profile.accountId ?? accountId(profile.credential));
+    const known = knownCredentialAccount(provider, profile.credential);
+    if (!id || (known && known !== id) || (provider !== "anthropic" && known !== id)) throw new Error("Invalid backup profile.");
   }
   for (const [filename, content] of Object.entries(raw.ledgers)) {
     if (!LEDGER.test(filename) || typeof content !== "string" || lines(content).some((line) => !validLine(line, filename))) throw new Error("Invalid backup ledger.");
+  }
+  if (raw.accounts !== undefined) {
+    if (!Array.isArray(raw.accounts)) throw new Error("Invalid backup.");
+    raw.accounts = raw.accounts.map((a) => {
+      if (!a || !isAccountProvider(a.provider) || !accountId(a) || a.key !== accountKey(a.provider, a.accountId)
+        || !Number.isFinite(a.firstSeenAt)) throw new Error("Invalid backup.");
+      return { provider: a.provider, accountId: a.accountId, key: a.key, firstSeenAt: a.firstSeenAt,
+        ...(displayText(a.note) ? { note: displayText(a.note) } : {}), ...(accountEmail(a.email) ? { email: accountEmail(a.email) } : {}),
+        ...(displayText(a.organization) ? { organization: displayText(a.organization) } : {}), ...(displayText(a.plan) ? { plan: displayText(a.plan) } : {}) };
+    });
   }
   if (raw.deletedIdentities !== undefined && (!Array.isArray(raw.deletedIdentities)
     || raw.deletedIdentities.some((id) => typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)))) throw new Error("Invalid backup.");
@@ -188,19 +198,26 @@ function parseSnapshot(data: unknown): Snapshot {
 /** Merge records by occurrence count, so restoring a backup twice never doubles usage. */
 export async function inspectHistory(path: string): Promise<{ profiles: string[]; records: number }> {
   const data = parseSnapshot(JSON.parse(await readFile(path, "utf8")));
-  return { profiles: data.profiles.map((profile) => profile.name),
+  return { profiles: data.profiles.map((profile) => `${profile.provider ?? "openai-codex"} / ${profile.name}`),
     records: Object.values(data.ledgers).reduce((sum, content) => sum + lines(content).length, 0) };
 }
 
 export async function importHistory(path: string): Promise<{ profiles: number; records: number }> {
   const data = parseSnapshot(JSON.parse(await readFile(path, "utf8")));
   return withLedgerLock(async () => {
-    const existing = await listAccounts();
+    const existing = await listAllAccounts();
+    const matches = (a: SavedProfile, b: { name: string; provider: AccountProvider }) => a.name === b.name && (a.provider ?? "openai-codex") === b.provider;
     for (const profile of data.profiles) {
-      const match = existing.profiles.find((item) => item.name === profile.name);
-      if (match && match.accountId !== accountId(profile.credential)) throw new Error("Profile name conflict; import aborted.");
+      const match = existing.profiles.find((item) => matches(profile, item));
+      if (match && match.accountId !== (profile.accountId ?? accountId(profile.credential))) throw new Error("Profile name conflict; import aborted.");
     }
-    const newProfiles = data.profiles.filter((profile) => !existing.profiles.some((item) => item.name === profile.name));
+    const newProfiles = data.profiles.filter((profile) => !existing.profiles.some((item) => matches(profile, item)));
+    for (const profile of newProfiles) {
+      try {
+        await lstat(profilePath(profile.name, profile.provider ?? "openai-codex"));
+        throw new Error("Profile path conflict; import aborted.");
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
     const changes: Array<{ path: string; before: string | undefined; after: string }> = [];
     let records = 0;
     for (const [filename, content] of Object.entries(data.ledgers)) {
@@ -230,13 +247,16 @@ export async function importHistory(path: string): Promise<{ profiles: number; r
     const changed: typeof changes = [];
     try {
       for (const profile of newProfiles) {
-        const dest = join(configDirectory(), "accounts", `${profile.name}.json`);
-        await atomic(dest, JSON.stringify(profile.credential, null, 2) + "\n");
+        const provider = profile.provider ?? "openai-codex";
+        const dest = profilePath(profile.name, provider);
+        await atomic(dest, JSON.stringify(storedProfileData(provider, profile.accountId ?? accountId(profile.credential)!, profile.credential), null, 2) + "\n");
         created.push(dest);
       }
       for (const change of changes) { await atomic(change.path, change.after); changed.push(change); }
       if (updateDeletions) await writeUsageDeletions(mergedDeletions);
+      await mergeAccountIdentities(data.accounts ?? [], data.profiles);
     } catch (error) {
+      if (updateDeletions) await writeUsageDeletions(existingDeletions);
       for (const change of changed.reverse()) {
         if (change.before === undefined) await rm(change.path, { force: true });
         else await atomic(change.path, change.before);
@@ -278,7 +298,7 @@ async function removeUsageRecords(
       if (kept.length !== rows.length) changes.push({ path: file, before: original, after: kept.length ? kept.join("\n") + "\n" : "" });
     }
     if (!removed) return { removed: 0, codexAccountIds: [], unassignedCodex: false };
-    const backup = await backupUnlocked();
+    const backup = await backupUnlocked(undefined, false);
     const written: typeof changes = [];
     const changedDeletions = deletions.size !== originalDeletions.size;
     try {
@@ -296,20 +316,20 @@ async function removeUsageRecords(
   });
 }
 
-/** Delete the visible provider/model row. In account views, only that account's Codex rows are removed. */
-export async function deleteModelUsage(provider: string, model: string, accountId?: string): Promise<{
+/** Delete only records in the same scope used by the visible ledger. Automatic backups omit credentials. */
+export async function deleteModelUsage(provider: string, model: string, selection?: UsageScope | string): Promise<{
   backup?: string; removed: number; codexAccountIds: string[]; unassignedCodex: boolean;
 }> {
   if (!provider || !model) throw new Error("A provider and model are required.");
-  return removeUsageRecords((record) => record.provider === provider && record.model === model
-    && (accountId === undefined || provider !== "openai-codex" || record.accountId === accountId),
+  const scope = usageScope(selection);
+  return removeUsageRecords((record) => record.provider === provider && record.model === model && matchesUsage(record, scope),
   "Ledger contains an incomplete or damaged line; deletion aborted without changing usage.");
 }
 
-export async function resetAccountUsage(id: string): Promise<{ backup: string; removed: number }> {
+export async function resetAccountUsage(id: string, provider: AccountProvider = "openai-codex"): Promise<{ backup: string; removed: number }> {
   if (!id) throw new Error("An account ID is required.");
-  const result = await removeUsageRecords((record) => record.provider === "openai-codex" && record.accountId === id,
+  const result = await removeUsageRecords((record) => matchesUsage(record, { type: "account", provider, accountId: id }),
     "Ledger contains an incomplete or damaged line; reset aborted without changing usage.");
   // Keep the existing reset behavior: even an empty account produces a backup.
-  return { removed: result.removed, backup: result.backup ?? await backupHistory() };
+  return { removed: result.removed, backup: result.backup ?? await backupHistory(undefined, false) };
 }

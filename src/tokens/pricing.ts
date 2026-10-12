@@ -1,6 +1,6 @@
 import type { TokenUsageRecord } from "../types.js";
 
-/** USD per million tokens, public global on-demand/effective rates, checked 2026-09-25. */
+/** USD per million tokens, public global on-demand/effective rates. GPT-6.1 Sol added 2026-10-12; other rates checked 2026-09-25. */
 export interface Rates { input: number; output: number; cacheRead: number; cacheWrite?: number }
 export interface PriceRow {
   provider: "openai-codex" | "openai" | "antigravity" | "google" | "google-vertex" | "anthropic" | "deepseek" | "xai";
@@ -24,7 +24,7 @@ const openai = (model: string, input: number, output: number, cacheRead: number,
   (["openai-codex", "openai"] as const).map((provider) => ({
     provider, model, rates: { input, output, cacheRead, ...(cacheWrite === undefined ? {} : { cacheWrite }) },
     source: `${OPENAI}${model}`,
-    ...((model.startsWith("gpt-6-") || model === "gpt-5.4" || model === "gpt-5.6-sol") ? { longContext: { threshold: 272_000, rates: {
+    ...((model.startsWith("gpt-6-") || model === "gpt-6.1-sol" || model === "gpt-5.4" || model === "gpt-5.6-sol") ? { longContext: { threshold: 272_000, rates: {
       input: input * 2, output: output * 1.5, cacheRead: cacheRead * 2,
       ...(cacheWrite === undefined ? {} : { cacheWrite: cacheWrite * 2 }),
     } } } : {}),
@@ -52,8 +52,9 @@ const deepseek = (model: string, input: number, output: number, cacheRead: numbe
   peakRates: { input: input * 2, output: output * 2, cacheRead: cacheRead * 2, cacheWrite: input * 2 },
 });
 
-export const PRICE_DATE = "2026-09-25";
+export const PRICE_DATE = "2026-10-12";
 export const PRICE_TABLE: readonly PriceRow[] = [
+  ...openai("gpt-6.1-sol", 2, 10, 0.1, 2.5),
   ...openai("gpt-6-sol", 2, 10, 0.2, 2.5),
   ...openai("gpt-6-luna", 0.1, 0.5, 0.01, 0.125),
   ...openai("gpt-6-astra", 10, 50, 1, 12.5),
@@ -140,7 +141,8 @@ export function estimateRecordCost(record: TokenUsageRecord): number | undefined
   // prices were added after those records were written without a cost.
   const backfill = (record.provider === "antigravity" && /^gemini-3\.8-flash(?:-(?:low|medium|high))?$/i.test(record.model))
     || (record.provider === "google-vertex" && /^gemini-3\.8-flash$/i.test(record.model))
-    || record.provider === "xai";
+    || record.provider === "xai"
+    || ((record.provider === "openai-codex" || record.provider === "openai") && /^gpt-6\.1-sol$/i.test(record.model));
   if (record.pricingAsOf !== undefined && !backfill) return undefined;
   if (!Number.isFinite(record.timestamp)) return undefined;
   const price = priceFor(record.provider, record.model, record.timestamp);

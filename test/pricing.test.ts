@@ -17,6 +17,25 @@ it("prices gpt-6-sol input, cached input, output and cache writes without double
     .toBeCloseTo((10_000 * 2 + 1000 * 10) / 1e6);
 });
 
+it("prices exact GPT-6.1 Sol IDs, with half-priced cache reads and the 272k prompt threshold", () => {
+  for (const provider of ["openai-codex", "openai"]) {
+    const usage = record(provider, "gpt-6.1-sol", { input: 100_000, cacheRead: 150_000, cacheWrite: 22_000 });
+    expect(estimateRecordCost(usage)).toBeCloseTo(1.27); // Exactly 272k: standard $2/$0.10/$2.50/$10.
+    expect(estimateRecordCost({ ...usage, cacheWrite: 22_001 })).toBeCloseTo(2.040005); // Full-request $4/$0.20/$5/$15.
+    expect(estimateRecordCost({ ...usage, reasoning: 0 })).toBe(estimateRecordCost(usage));
+    expect(estimateRecordCost({ ...usage, model: "GPT-6.1-SOL" })).toBe(estimateRecordCost(usage));
+    expect(estimateRecordCost({ ...usage, pricingAsOf: "2026-09-25" })).toBe(estimateRecordCost(usage));
+    expect(estimateRecordCost({ ...usage, pricingAsOf: "2026-09-25", estimatedCostUsd: 7 })).toBe(7);
+    expect(estimateRecordCost({ ...usage, pricingAsOf: "2026-09-25", estimatedCostUsd: 0 })).toBe(0);
+    expect(estimateRecordCost({ ...usage, model: "gpt-6.1-sol-image", pricingAsOf: "2026-09-25" })).toBeUndefined();
+    const saved = tokenRecord({ role: "assistant", provider, model: "gpt-6.1-sol", timestamp: usage.timestamp,
+      api: "openai-codex-responses", content: [], stopReason: "stop",
+      usage: { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+    expect(saved).toMatchObject({ pricingAsOf: PRICE_DATE, estimatedCostUsd: 1.27 });
+  }
+  expect(estimateRecordCost(record("antigravity", "gpt-6.1-sol", { pricingAsOf: "2026-09-25" }))).toBeUndefined();
+});
+
 it("uses exact provider/model matching, Gemini high-context rates, and conservative unknown handling", () => {
   expect(estimateRecordCost(record("antigravity", "gemini-3.1-pro-preview", { input: 210_000, cacheRead: 0, output: 10_000 })))
     .toBeCloseTo((210_000 * 4 + 10_000 * 18) / 1e6);
@@ -115,7 +134,7 @@ it("freezes the collected cost, preserves recorded amounts, and retroactively pr
 });
 
 it("publishes a dated, official-source price catalogue", () => {
-  expect(PRICE_DATE).toBe("2026-09-25");
+  expect(PRICE_DATE).toBe("2026-10-12");
   expect(PRICE_TABLE.map((row) => [row.provider, row.model]).length).toBeGreaterThanOrEqual(60);
   for (const row of PRICE_TABLE) {
     expect(row.source).toMatch(/^https:\/\/(developers\.openai\.com|ai\.google\.dev|platform\.claude\.com|cloud\.google\.com|api-docs\.deepseek\.com|docs\.x\.ai)\//);

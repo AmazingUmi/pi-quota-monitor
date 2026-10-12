@@ -165,7 +165,7 @@ export function quotaAmountEstimates(
   aggregator: UsageAggregator,
   codex: ProviderCache<CodexQuota>, antigravity: ProviderCache<AntigravityQuota>,
   codexHistory: CodexQuota[], agyHistory: AntigravityQuota[],
-  claude: ProviderCache<ClaudeQuota> = {}, claudeHistory: ClaudeQuota[] = [], claudeAccountId?: string,
+  claude: ProviderCache<ClaudeQuota> = {}, claudeHistory: ClaudeQuota[] = [], claudeAccountId?: string, codexAccountId?: string,
 ): QuotaAmountEstimates {
   const now = Date.now();
   const stale = aggregator.state().stale;
@@ -178,7 +178,7 @@ export function quotaAmountEstimates(
     : { note: "无法确认当前 Claude OAuth 账号身份，暂不估算金额。" };
   const codexEstimate = (key: "fiveHour" | "weekly", duration: number) => estimateQuotaAmount(
     codexSamples.map((q) => ({ capturedAt: q.capturedAt, window: q.plan === codex.value?.plan ? q[key] : undefined })), duration,
-    (start, end) => aggregator.estimateCostForPeriod("openai-codex", start, end), now, stale, true);
+    (start, end) => aggregator.estimateCostForPeriod("openai-codex", start, end, undefined, codexAccountId), now, stale, true);
   return {
     codex: { fiveHour: codexEstimate("fiveHour", (codex.value?.fiveHour?.windowMinutes ?? 300) * 60_000),
       weekly: codexEstimate("weekly", (codex.value?.weekly?.windowMinutes ?? 10080) * 60_000) },

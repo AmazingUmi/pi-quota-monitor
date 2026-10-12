@@ -37,7 +37,8 @@ export function dashboardFixture() {
     },
     context: { tokens: 70720, contextWindow: 272000, percent: 26 },
     quotaEstimates: { codex: { fiveHour: estimate, weekly: estimate }, claude: { fiveHour: estimate, weekly: estimate }, antigravity: { groups: [{ name: "Gemini", windows: [estimate, estimate] }, { name: "Claude / GPT", windows: [estimate, estimate] }] } },
-    config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true, showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true },
+    config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true, showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true,
+      showCodexCard: true, showClaudeCard: true, showGrokCard: true, showAgyCard: true },
     updatedAt: now,
   };
   return { ...state, control: "test-control", usage: { ...state.usage, pricing: { ...state.usage.pricing, catalog: [

@@ -3,7 +3,7 @@ import { configDirectory } from "./config.js";
 
 /** Static assets are captured when the HTTP server first starts. Increment when the
  * bundled dashboard changes, so /reload does not keep serving an older UI. */
-const ASSETS_VERSION = 9;
+const ASSETS_VERSION = 12;
 
 /** Process-owned socket; session replacement swaps delegates without rebinding the listening port. */
 class ResidentDashboard {
@@ -34,6 +34,7 @@ class ResidentDashboard {
     setInterval: (seconds) => this.connected().setInterval(seconds),
     setPort: (port) => this.connected().setPort(port),
     setStatusbar: (settings) => this.connected().setStatusbar(settings),
+    setCards: (settings) => this.connected().setCards!(settings),
   });
   private connected(): DashboardActions {
     if (!this.actions) throw new Error("Waiting for Pi session");

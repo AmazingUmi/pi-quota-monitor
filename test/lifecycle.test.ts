@@ -10,6 +10,7 @@ import quotaMonitor from "../src/index.js";
 import { appendUsage } from "../src/tokens/store.js";
 import { attachDashboard, detachDashboard } from "../src/resident-dashboard.js";
 import { dashboardFixture } from "./fixtures/dashboard-state.js";
+import { accountKey, accountViewId } from "../src/account-identity.js";
 
 const stored = vi.hoisted(() => ({ root: "", account: "test-account", data: new Map<string, Array<CodexQuota | AntigravityQuota>>(), saved: vi.fn() }));
 vi.mock("../src/quota-readings.js", () => ({ QuotaReadings: class {
@@ -21,11 +22,20 @@ vi.mock("../src/quota-readings.js", () => ({ QuotaReadings: class {
     stored.data.set(key, [...(stored.data.get(key) ?? []), value]);
   }
 } }));
-vi.mock("../src/accounts.js", () => ({
-  activeAccountId: () => stored.account,
-  listAccounts: async () => ({ current: stored.account, profiles: [{ name: stored.account, accountId: stored.account }] }),
-  deleteAccount: vi.fn(), importAccount: vi.fn(), saveAccount: vi.fn(), useAccount: vi.fn(),
+vi.mock("@earendil-works/pi-coding-agent", async (load) => ({
+  ...await load<typeof import("@earendil-works/pi-coding-agent")>(),
+  readStoredCredential: (provider: string) => provider === "openai-codex"
+    ? { type: "oauth", accountId: stored.account, access: "test", refresh: "refresh", expires: Date.now() + 3_600_000 } : undefined,
 }));
+vi.mock("../src/accounts.js", async (load) => {
+  const original = await load<typeof import("../src/accounts.js")>();
+  return { ...original,
+    activeAccountId: (provider = "openai-codex") => provider === "openai-codex" ? stored.account : undefined,
+    listAccounts: async () => ({ current: stored.account, profiles: [{ name: stored.account, provider: "openai-codex", accountId: stored.account, key: original.accountKey("openai-codex", stored.account) }] }),
+    listAllAccounts: async () => ({ accounts: [{ provider: "openai-codex", accountId: stored.account, key: original.accountKey("openai-codex", stored.account), firstSeenAt: Date.now() }], profiles: [], current: { "openai-codex": stored.account } }),
+    deleteAccount: vi.fn(), importAccount: vi.fn(), saveAccount: vi.fn(), useAccount: vi.fn(),
+  };
+});
 vi.mock("../src/config.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/config.js")>();
   return { ...original, configDirectory: () => stored.root, loadConfig: vi.fn(async () => ({ ...original.DEFAULT_CONFIG, dashboardPort: 0 })), saveConfig: vi.fn(async () => {}) };
@@ -175,7 +185,7 @@ it("keeps selected RPC status visible in the console and applies settings withou
   cleanup.push(() => fire("session_shutdown"));
   await fire("session_start");
   expect([...commands.keys()]).toEqual([
-    "quota-account-list", "quota-account-current", "quota-account-save", "quota-account-import", "quota-account-use", "quota-account-delete",
+    "quota-account-list", "quota-account-current", "quota-account-save", "quota-account-import", "quota-account-use", "quota-account-note", "quota-account-delete",
     "quota-account-backup", "quota-account-backups", "quota-account-restore", "quota-account-reset-cache", "quota-account-reset-usage",
     "quota", "quota-console", "quota-refresh", "quota-interval",
   ]);
@@ -207,6 +217,15 @@ it("keeps selected RPC status visible in the console and applies settings withou
   expect(sendUserMessage).toHaveBeenCalledWith("/quota-account-use pro", { expandPromptTemplates: true });
   const { queryCodexQuota } = await import("../src/providers/codex.js");
   const callsBeforeRefresh = vi.mocked(queryCodexQuota).mock.calls.length;
+  const statusBeforeCards = statuses.at(-1);
+  const cards = await fetch(`${url}/api/cards`, { method: "POST", headers,
+    body: JSON.stringify({ showClaudeCard: false, showGrokCard: false }) });
+  expect(cards.status).toBe(200);
+  expect(vi.mocked(saveConfig)).toHaveBeenLastCalledWith(expect.objectContaining({ showClaudeCard: false, showGrokCard: false }));
+  expect(vi.mocked(queryCodexQuota).mock.calls.length).toBe(callsBeforeRefresh);
+  expect(statuses.at(-1)).toEqual(statusBeforeCards);
+  const cardState = await (await fetch(`${url}/api/state`)).json();
+  expect(cardState.config).toMatchObject({ showClaudeCard: false, showGrokCard: false, showClaudeInStatusbar: true });
   const saved = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
     body: JSON.stringify({ showOaiInStatusbar: false, showClaudeInStatusbar: false, showAgyInStatusbar: false, showGrokInStatusbar: false }) });
   expect(saved.status).toBe(200);
@@ -229,6 +248,10 @@ it("keeps selected RPC status visible in the console and applies settings withou
   await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, tuiContext);
   expect(statuses.at(-1)?.text).toContain("OAI 73%/61% | CLA -/- | AGY 84%/67%");
 
+  vi.mocked(saveConfig).mockRejectedValueOnce(new Error("disk full"));
+  const failedCards = await fetch(`${url}/api/cards`, { method: "POST", headers, body: JSON.stringify({ showClaudeCard: true }) });
+  expect(failedCards.status).toBe(500);
+  expect((await (await fetch(`${url}/api/state`)).json()).config.showClaudeCard).toBe(false);
   vi.mocked(saveConfig).mockRejectedValueOnce(new Error("disk full"));
   const failedSave = await fetch(`${url}/api/statusbar`, { method: "POST", headers,
     body: JSON.stringify({ showOaiInStatusbar: true }) });
@@ -343,7 +366,7 @@ it("shows saved account-specific readings before remote queries finish and persi
   stored.account = "other-account";
   await handlers.get("model_select")?.({ model: { provider: "openai-codex" } }, ctx);
   const switched = await (await fetch(`${url}/api/state`)).json();
-  expect(switched.currentAccountId).toBe("account:other-account");
+  expect(switched.currentAccountId).toBe(accountViewId("openai-codex", "other-account"));
   expect(switched.codex.value?.fiveHour.remainingPercent).not.toBe(40);
 });
 

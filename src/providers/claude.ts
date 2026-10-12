@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { accountEmail, displayText } from "../account-identity.js";
 import type { ClaudeQuota, QuotaWindow } from "../types.js";
 import { epochMilliseconds, fetchJsonObject, isRecord, numberValue } from "./http.js";
 
@@ -23,7 +24,7 @@ export function parseClaudeQuota(payload: unknown, capturedAt = Date.now()): Cla
   return { capturedAt, ...(fiveHour ? { fiveHour } : {}), ...(weekly ? { weekly } : {}) };
 }
 
-/** Opaque, stable local scope; neither UUID nor email is written to quota files or the dashboard. */
+/** Opaque account/organization scope; raw UUIDs stay out of quota files. Display email lives only in account metadata. */
 export function parseClaudeIdentity(payload: unknown): string | undefined {
   if (!isRecord(payload) || !isRecord(payload.account) || !isRecord(payload.organization)) return;
   const account = payload.account.uuid;
@@ -33,16 +34,26 @@ export function parseClaudeIdentity(payload: unknown): string | undefined {
   return createHash("sha256").update(JSON.stringify([account, organization])).digest("hex");
 }
 
-export async function queryClaudeQuota(access: string, signal: AbortSignal, timeoutMs: number): Promise<{ quota: ClaudeQuota; accountId?: string }> {
+export interface ClaudeAccount { accountId: string; email?: string; organization?: string; plan?: string }
+export function parseClaudeAccount(payload: unknown): ClaudeAccount | undefined {
+  const accountId = parseClaudeIdentity(payload);
+  if (!accountId || !isRecord(payload) || !isRecord(payload.account) || !isRecord(payload.organization)) return;
+  return { accountId, email: accountEmail(payload.account.email), organization: displayText(payload.organization.name),
+    plan: displayText(payload.organization.subscription_type) };
+}
+export async function queryClaudeAccount(access: string, signal: AbortSignal, timeoutMs: number): Promise<ClaudeAccount | undefined> {
+  if (!access || /\s/.test(access)) throw new Error("Claude OAuth credential unavailable.");
+  return parseClaudeAccount(await fetchJsonObject(`${ORIGIN}/api/oauth/profile`,
+    { headers: { ...HEADERS, Authorization: `Bearer ${access}` } }, { signal, timeoutMs }));
+}
+export async function queryClaudeQuota(access: string, signal: AbortSignal, timeoutMs: number): Promise<{ quota: ClaudeQuota; accountId?: string; email?: string; organization?: string; plan?: string }> {
   if (!access || /\s/.test(access)) throw new Error("Claude OAuth credential unavailable.");
   const headers = { ...HEADERS, Authorization: `Bearer ${access}` };
   // A profile failure must not hide valid quota, but it must disable account-bound history/estimates.
   const quotaPayload = await fetchJsonObject(`${ORIGIN}/api/oauth/usage`, { headers }, { signal, timeoutMs });
   const quota = parseClaudeQuota(quotaPayload);
-  let accountId: string | undefined;
-  try {
-    const profile = await fetchJsonObject(`${ORIGIN}/api/oauth/profile`, { headers }, { signal, timeoutMs });
-    accountId = parseClaudeIdentity(profile);
-  } catch { /* No trustworthy account identity: do not persist or estimate. */ }
-  return { quota, ...(accountId ? { accountId } : {}) };
+  let account: ClaudeAccount | undefined;
+  try { account = await queryClaudeAccount(access, signal, timeoutMs); }
+  catch { /* No trustworthy account identity: do not persist or estimate. */ }
+  return { quota, ...account };
 }

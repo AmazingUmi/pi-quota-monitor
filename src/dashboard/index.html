@@ -18,14 +18,6 @@
       <nav class="main-nav" aria-label="页面导航">
         <a href="#quota-title">额度</a><a href="#overview-title">趋势</a><a href="#usage-title">用量</a><a href="#settings">设置</a>
       </nav>
-      <details class="account-menu" id="account-menu"><summary aria-label="账户选择：总量"><svg class="account-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><strong id="account-selection">总量</strong><span class="account-chevron" aria-hidden="true">⌄</span></summary>
-        <div class="account-pop">
-        <div class="account-ledger"><label for="usage-account">查看账本</label><select id="usage-account"><option value="all">总体用量</option></select></div>
-        <div class="current-account"><span class="account-avatar" aria-hidden="true">P</span><span><span class="field-label">当前登录</span><strong id="account-current">读取中…</strong></span></div>
-        <div class="account-actions" role="group" aria-label="账号管理与历史">
-          <button id="account-use" type="button">切换账号</button><button id="account-add" type="button">新增账号</button><button id="account-manage" type="button">管理账号</button><button id="account-history" type="button">历史记录</button>
-        </div>
-        </div></details>
       <button id="refresh" class="button-primary" type="button"><span aria-hidden="true">↻</span> 刷新额度</button>
       <span id="connection-status" class="connection-status" data-state="loading" role="status" aria-label="连接中" title="连接中"></span>
     </div>
@@ -44,35 +36,51 @@
       <div class="section-heading"><div><div class="title-row"><h2 id="quota-title">剩余额度</h2>
         <div class="help-tip"><button class="help-button" type="button" aria-label="额度与金额口径" aria-describedby="quota-help" aria-controls="quota-help" aria-expanded="false">?</button>
           <div id="quota-help" class="help-tooltip" role="tooltip" hidden><strong>额度与金额口径</strong><p>API 标价估算 · 非账户余额</p>
-            <p>Codex 显示账号剩余额度；总体及历史账号无法查询实时额度。Claude 额度仅对应 Pi 当前登录的 Anthropic OAuth 账号，与 Codex 账本选择无关；身份无法确认时不估算金额。Antigravity 额度独立于 Codex 账号，在各视图共享。Grok 显示 Pi 当前 xAI OAuth 的 SuperGrok 共享额度剩余，不是 xAI API 预付费余额，也不做金额估算。</p>
-            <p>开关更改后立即保存，失败会恢复原设置。仅影响 pi-web 扩展状态栏片段，不会停止额度查询、隐藏本页额度或改变 /quota 输出；TUI 状态栏保持原有行为。</p>
+            <p>额度卡分别标注所属 OAuth 账号；总体视图显示各服务商当前登录账号的额度。查看历史账号只显示其已保存读数及时间，不会切换登录。账号额度可能含其他客户端消耗，不等于本地 Token 用量；不同订阅百分比不相加。agy 暂不参与账号管理，其额度独立只读。Grok 共享额度不是 xAI API 余额，也不做金额估算。</p>
+            <p>在「状态与设置」中可独立控制额度卡片和 Pi 状态栏显示。设置立即保存，失败恢复原设置；隐藏卡片不切换登录、不停止查询或用量采集，不影响账本和 /quota 输出。TUI 状态栏保持原有行为。</p>
             <p>Claude / Antigravity 的剩余金额为条件估算：在同一重置周期内，用两次已保存读数之间的 Token 时间戳匹配账本金额，对照这段时间的额度下降，估算剩余金额。样本不足、额度未下降、跨重置或记录未计价时不外推。其他客户端消耗仍可能造成偏差，不是订阅实付或账户余额。OAI 显示剩余额度。启动先显示上次读数，每次成功读取均保存。</p>
           </div>
         </div>
       </div></div><div class="quota-controls"><label for="quota-view" class="sr-only">剩余额度视图</label><select id="quota-view" hidden><option value="ring" selected>圆环视图</option><option value="bar">进度条视图</option><option value="pie">饼图视图</option></select></div></div>
       <p id="quota-pie-legend" class="pie-legend" hidden><span><i class="remaining-key" aria-hidden="true"></i>剩余</span><span><i class="used-key" aria-hidden="true"></i>已用</span><span>未知 / 不适用不绘制占比</span></p>
       <div id="provider-grid" class="provider-grid" data-quota-view="ring">
-        <article class="provider-card panel" aria-labelledby="codex-title">
-          <header class="provider-heading"><span class="provider-icon codex-icon" aria-hidden="true">O</span><h3 id="codex-title">OpenAI Codex</h3><details class="info-help provider-help"><summary aria-label="OpenAI Codex 额度说明">?</summary><div class="help-content"><strong>OpenAI Codex</strong><p id="codex-plan">等待额度数据</p><p id="codex-success">等待查询</p><div id="codex-error" aria-live="polite"></div></div></details></header>
+        <article id="codex-card" class="provider-card panel" aria-labelledby="codex-title">
+          <header class="provider-heading"><span class="provider-icon codex-icon" aria-hidden="true">O</span><h3 id="codex-title">OpenAI Codex</h3>
+            <details class="account-menu" id="codex-account-menu" data-provider="openai-codex"><summary aria-label="管理 Codex 账号" title="Codex 账号管理"><svg class="account-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></summary>
+              <div class="account-pop"><div class="current-account"><span class="account-avatar" aria-hidden="true">O</span><span><span class="field-label">Codex 当前登录</span><strong id="codex-account-current">读取中…</strong></span></div>
+                <div class="account-actions" role="group" aria-label="Codex 账号管理"><button id="codex-account-use" data-account-action="switch" type="button">切换账号</button><button id="codex-account-add" data-account-action="add" type="button">新增账号</button><button id="codex-account-manage" data-account-action="manage" type="button">管理账号</button><button id="codex-account-history" data-account-action="history" type="button">历史记录</button></div>
+              </div>
+            </details><details class="info-help provider-help"><summary aria-label="OpenAI Codex 额度说明">?</summary><div class="help-content"><strong>OpenAI Codex</strong><p id="codex-plan">等待额度数据</p><p id="codex-success">等待查询</p><div id="codex-error" aria-live="polite"></div></div></details></header>
+          <div class="provider-accounts"><p id="codex-account" class="provider-account">当前账号：读取中…</p><p id="codex-quota-account" class="quota-owner" hidden></p></div>
           <div class="quota-groups"><section class="quota-group"><div id="codex-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
-          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-oai" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 OAI</span></label></div>
         </article>
-        <article class="provider-card panel" aria-labelledby="claude-title">
-          <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><h3 id="claude-title">Claude</h3><details class="info-help provider-help"><summary aria-label="Claude 额度说明">?</summary><div class="help-content"><strong>Claude</strong><p id="claude-plan">等待额度数据</p><p id="claude-success">等待查询</p><div id="claude-error" aria-live="polite"></div></div></details></header>
+        <article id="claude-card" class="provider-card panel" aria-labelledby="claude-title">
+          <header class="provider-heading"><span class="provider-icon claude-icon" aria-hidden="true">C</span><h3 id="claude-title">Claude</h3>
+            <details class="account-menu" id="claude-account-menu" data-provider="anthropic"><summary aria-label="管理 Claude 账号" title="Claude 账号管理"><svg class="account-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></summary>
+              <div class="account-pop"><div class="current-account"><span class="account-avatar" aria-hidden="true">C</span><span><span class="field-label">Claude 当前登录</span><strong id="claude-account-current">读取中…</strong></span></div>
+                <div class="account-actions" role="group" aria-label="Claude 账号管理"><button id="claude-account-use" data-account-action="switch" type="button">切换账号</button><button id="claude-account-add" data-account-action="add" type="button">新增账号</button><button id="claude-account-manage" data-account-action="manage" type="button">管理账号</button><button id="claude-account-history" data-account-action="history" type="button">历史记录</button></div>
+              </div>
+            </details><details class="info-help provider-help"><summary aria-label="Claude 额度说明">?</summary><div class="help-content"><strong>Claude</strong><p id="claude-plan">等待额度数据</p><p id="claude-success">等待查询</p><div id="claude-error" aria-live="polite"></div></div></details></header>
+          <div class="provider-accounts"><p id="claude-account" class="provider-account">当前账号：读取中…</p><p id="claude-quota-account" class="quota-owner" hidden></p></div>
           <div class="quota-groups"><section class="quota-group"><div id="claude-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
-          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 CLA</span></label></div>
         </article>
-        <article class="provider-card panel" aria-labelledby="grok-title">
-          <header class="provider-heading"><span class="provider-icon grok-icon" aria-hidden="true">G</span><h3 id="grok-title">Grok</h3><details class="info-help provider-help"><summary aria-label="Grok 额度说明">?</summary><div class="help-content"><strong>Grok</strong><p id="grok-plan">等待额度数据</p><p id="grok-success">等待查询</p><div id="grok-error" aria-live="polite"></div></div></details></header>
+        <article id="grok-card" class="provider-card panel" aria-labelledby="grok-title">
+          <header class="provider-heading"><span class="provider-icon grok-icon" aria-hidden="true">G</span><h3 id="grok-title">Grok</h3>
+            <details class="account-menu" id="grok-account-menu" data-provider="xai"><summary aria-label="管理 Grok 账号" title="Grok 账号管理"><svg class="account-menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></summary>
+              <div class="account-pop"><div class="current-account"><span class="account-avatar" aria-hidden="true">G</span><span><span class="field-label">Grok 当前登录</span><strong id="grok-account-current">读取中…</strong></span></div>
+                <div class="account-actions" role="group" aria-label="Grok 账号管理"><button id="grok-account-use" data-account-action="switch" type="button">切换账号</button><button id="grok-account-add" data-account-action="add" type="button">新增账号</button><button id="grok-account-manage" data-account-action="manage" type="button">管理账号</button><button id="grok-account-history" data-account-action="history" type="button">历史记录</button></div>
+              </div>
+            </details><details class="info-help provider-help"><summary aria-label="Grok 额度说明">?</summary><div class="help-content"><strong>Grok</strong><p id="grok-plan">等待额度数据</p><p id="grok-success">等待查询</p><div id="grok-error" aria-live="polite"></div></div></details></header>
+          <div class="provider-accounts"><p id="grok-account" class="provider-account">当前账号：读取中…</p><p id="grok-quota-account" class="quota-owner" hidden></p></div>
           <div class="quota-groups"><section class="quota-group"><div id="grok-windows" class="quota-windows"><p class="hint">正在读取额度…</p></div></section></div>
-          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-grok" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 GRK</span></label></div>
         </article>
-        <article class="provider-card panel" aria-labelledby="agy-title">
+        <article id="agy-card" class="provider-card panel" aria-labelledby="agy-title">
           <header class="provider-heading"><span class="provider-icon agy-icon" aria-hidden="true">A</span><h3 id="agy-title">Antigravity</h3><details class="info-help provider-help"><summary aria-label="Antigravity 额度说明">?</summary><div class="help-content"><strong>Antigravity</strong><p id="agy-plan">等待额度数据</p><p id="agy-success">等待查询</p><div id="agy-error" aria-live="polite"></div></div></details></header>
+          <div class="provider-accounts"><p class="provider-account">账号：独立只读登录（agy 暂不参与账号管理）</p></div>
           <div id="agy-windows" class="quota-groups"><p class="hint">正在读取额度…</p></div>
-          <div class="provider-foot"><label class="provider-status-toggle toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>状态栏显示 AGY</span></label></div>
         </article>
       </div>
+      <p id="quota-empty-state" class="hint" role="status" hidden>全部额度卡片已隐藏，可在「状态与设置」中恢复显示。</p>
     </section>
 
     <section class="section overview-section" aria-labelledby="overview-title">
@@ -87,9 +95,12 @@
       </div></div></div>
       <div class="dash-row">
       <div class="panel usage-panel">
-        <div class="stat-row">
-          <div class="stat"><div class="stat-label">累计 Tokens<details class="info-help"><summary aria-label="Token 统计说明">?</summary><div class="help-content"><strong>Token 统计说明</strong><p id="overview-tokens-detail">正在读取本地账本…</p></div></details></div><strong id="overview-tokens">—</strong></div>
-          <div class="stat"><div class="stat-label">估算费用 <span class="unit">USD</span><details class="info-help"><summary aria-label="费用估算说明">?</summary><div class="help-content"><strong>费用估算说明</strong><p id="overview-cost-detail">等待价格匹配</p></div></details></div><strong id="overview-cost">—</strong></div>
+        <div class="overview-card-header">
+          <div class="stat-row">
+            <div class="stat"><div class="stat-label">累计 Tokens<details class="info-help"><summary aria-label="Token 统计说明">?</summary><div class="help-content"><strong>Token 统计说明</strong><p id="overview-tokens-detail">正在读取本地账本…</p></div></details></div><strong id="overview-tokens">—</strong></div>
+            <div class="stat"><div class="stat-label">估算费用 <span class="unit">USD</span><details class="info-help"><summary aria-label="费用估算说明">?</summary><div class="help-content"><strong>费用估算说明</strong><p id="overview-cost-detail">等待价格匹配</p></div></details></div><strong id="overview-cost">—</strong></div>
+          </div>
+          <div class="ledger-filter"><label for="usage-account">统计范围</label><select id="usage-account"><option value="all">总体用量</option></select><span id="ledger-selection" class="sr-only" aria-live="polite">总体用量</span></div>
         </div>
         <div class="chart-heading"><div class="title-row"><h3>Token 与金额消耗趋势</h3><details class="info-help"><summary aria-label="消耗趋势说明">?</summary><div class="help-content"><strong>消耗趋势说明</strong><p>本插件账本 · 金额按公开 API 标价估算 · 小时刻度使用浏览器本地时区<span id="chart-view-note"></span></p><p id="chart-summary" aria-live="polite"></p><p id="cost-chart-summary" aria-live="polite"></p></div></details></div>
           <div class="chart-controls"><div><label for="chart-view">展示方式</label><select id="chart-view"><option value="interval">分时消耗</option><option value="cumulative">时段累计</option></select></div><div><label for="chart-period">时间范围</label><select id="chart-period"><option value="hours">最近 24 小时</option><option value="days">最近 30 天</option></select></div><div><label for="chart-model">模型</label><select id="chart-model"><option value="all">全部模型</option></select></div></div>
@@ -114,9 +125,9 @@
 
     <section class="section usage-section" aria-labelledby="usage-title">
       <div class="section-heading"><div><h2 id="usage-title">用量分析</h2></div></div>
-      <div class="panel breakdown-panel"><div class="subsection-heading"><div class="title-row"><h3>Token 构成</h3><details class="info-help"><summary aria-label="Token 构成说明">?</summary><div class="help-content"><strong>Token 构成说明</strong><p>累计用量 · Reasoning 已包含在 Output 中。</p><p>Codex 按账号隔离 · Antigravity 共享。</p></div></details></div></div><div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div></div>
+      <div class="panel breakdown-panel"><div class="subsection-heading"><div class="title-row"><h3>Token 构成</h3><details class="info-help"><summary aria-label="Token 构成说明">?</summary><div class="help-content"><strong>Token 构成说明</strong><p>累计用量 · Reasoning 已包含在 Output 中。</p><p>Codex / Claude / Grok 严格按账号隔离；agy、API Key 和未归属用量单独统计，总体只累计一次。</p></div></details></div></div><div id="tokens" aria-live="polite"><p class="hint">正在读取本地账本…</p></div></div>
       <div class="panel models-panel">
-        <div class="subsection-heading"><div class="title-row"><h3>各模型明细</h3><details class="info-help"><summary aria-label="模型记录说明">?</summary><div class="help-content"><strong>模型记录说明</strong><p>可删除某一 Provider / Model 的现有本地记录（先自动备份）；账号视图只清除该账号的 Codex 记录，共享模型在所有视图一并清除。未来的新用量仍会记录。</p></div></details></div></div>
+        <div class="subsection-heading"><div class="title-row"><h3>各模型明细</h3><details class="info-help"><summary aria-label="模型记录说明">?</summary><div class="help-content"><strong>模型记录说明</strong><p>可删除当前统计范围内某一 Provider / Model 的现有本地记录，先自动备份账本（不含凭据）；账号视图只清除该账号的记录，不影响其他账号。未来的新用量仍会记录。</p></div></details></div></div>
 
         <div id="models" class="table-scroll" tabindex="0" role="region" aria-label="各模型 Token 与估算费用明细，可横向滚动"></div>
         <details class="price-details disclosure"><summary>查看价格表与估算口径</summary><p class="hint">标准付费 API 文本 Token 标价（USD / 100 万 tokens），截至 <span id="price-date">—</span>。按每条账本记录分别计算后求和；超过模型阈值的请求使用高上下文价。Reasoning 计入 Output。Claude cache write 按 5 分钟价格估算；Gemini 缓存存储时长、音频/图像、工具费用及订阅折扣未计入。未匹配模型或无法定价的记录单独列为未计价，不当作零费用。新记录保留采集时的估算金额；未保存金额的旧记录按此版价格补估。</p><div id="price-table" class="table-scroll" tabindex="0" role="region" aria-label="公开 API 价格表，可横向滚动"></div></details>
@@ -128,11 +139,24 @@
       <div class="settings-content">
         <details class="info-help"><summary aria-label="查询与刷新说明">?</summary><div class="help-content"><strong>查询与刷新说明</strong><p>Provider 状态为只读信息。后台间隔控制额度查询频率；页面每 5 秒读取本地缓存和账本增量，不会额外调用 Provider API。</p></div></details>
         <div class="provider-status-grid" aria-label="Provider 查询状态">
-          <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div></article>
-          <article class="provider-status"><h3>Claude</h3><div id="claude-query-status"></div></article>
-          <article class="provider-status"><h3>Grok</h3><div id="grok-query-status"></div></article>
-          <article class="provider-status"><h3>Antigravity</h3><div id="agy-query-status"></div></article>
+          <article class="provider-status"><h3>OpenAI Codex</h3><div id="codex-query-status"></div><div class="provider-display-controls">
+            <label class="toggle"><input id="show-codex-card" class="switch-input" type="checkbox" role="switch" checked><span class="switch-track" aria-hidden="true"></span><span>显示 Codex 额度卡片</span></label>
+            <label class="toggle"><input id="show-oai" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>Pi 状态栏显示 OAI</span></label>
+          </div></article>
+          <article class="provider-status"><h3>Claude</h3><div id="claude-query-status"></div><div class="provider-display-controls">
+            <label class="toggle"><input id="show-claude-card" class="switch-input" type="checkbox" role="switch" checked><span class="switch-track" aria-hidden="true"></span><span>显示 Claude 额度卡片</span></label>
+            <label class="toggle"><input id="show-claude" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>Pi 状态栏显示 CLA</span></label>
+          </div></article>
+          <article class="provider-status"><h3>Grok</h3><div id="grok-query-status"></div><div class="provider-display-controls">
+            <label class="toggle"><input id="show-grok-card" class="switch-input" type="checkbox" role="switch" checked><span class="switch-track" aria-hidden="true"></span><span>显示 Grok 额度卡片</span></label>
+            <label class="toggle"><input id="show-grok" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>Pi 状态栏显示 GRK</span></label>
+          </div></article>
+          <article class="provider-status"><h3>Antigravity</h3><div id="agy-query-status"></div><div class="provider-display-controls">
+            <label class="toggle"><input id="show-agy-card" class="switch-input" type="checkbox" role="switch" checked><span class="switch-track" aria-hidden="true"></span><span>显示 Antigravity 额度卡片</span></label>
+            <label class="toggle"><input id="show-agy" class="switch-input" type="checkbox" role="switch"><span class="switch-track" aria-hidden="true"></span><span>Pi 状态栏显示 AGY</span></label>
+          </div></article>
         </div>
+        <p class="hint">卡片显示与 Pi 状态栏显示独立保存；隐藏卡片不影响登录、后台查询、用量统计或账本筛选。</p>
         <form id="port-form" class="port-settings"><label for="dashboard-port">控制台端口（1024–65535，下次启动生效）</label>
           <div class="form-row"><input id="dashboard-port" type="number" min="1024" max="65535" step="1" required aria-describedby="port-state port-hint"><button id="port-check" type="button">检测占用</button><button id="port-use-current" type="button">填入当前端口</button><button id="port-submit" type="submit">保存端口</button></div>
           <p id="port-state" class="hint"></p><details class="info-help"><summary aria-label="端口设置说明">?</summary><div class="help-content"><strong>端口设置说明</strong><p id="port-hint">保存前会检测占用，不会中断当前页面。检测仅代表当前状态，不预留端口；下次启动控制台时若被占用，会自动选择可用端口并提示你设置，不会自动覆盖已保存配置。</p></div></details>
@@ -148,19 +172,20 @@
   <dialog id="account-switch-dialog" aria-labelledby="account-switch-title">
     <div class="dialog-heading"><h3 id="account-switch-title">切换账号</h3><button type="button" class="dialog-close" data-close-dialog="account-switch-dialog" aria-label="关闭切换账号弹窗">×</button></div>
     <div class="account-row"><label for="account-switch-profile">选择账号</label><select id="account-switch-profile"></select><button id="account-switch-confirm" class="button-primary" type="button">确认切换</button></div>
-    <p class="hint">Pi 窗口还会要求确认；插件会核对运行时凭据，不会强制重建当前会话。若需要全新 Pi 进程，请退出后重新启动 Pi。OAuth 登录仍使用 Pi 的 /login。</p>
+    <p class="hint">只切换所选服务商账号，不切换模型、不重建会话、不改变账本筛选。Pi 窗口还会要求确认，失败会回滚。OAuth 登录仍使用 Pi 的 /login；请勿在其他共享 auth.json 的进程请求期间切换。</p>
     <p id="account-switch-feedback" class="hint" role="status" aria-live="polite"></p>
   </dialog>
   <dialog id="account-add-dialog" aria-labelledby="account-add-title">
     <div class="dialog-heading"><h3 id="account-add-title">新增账号</h3><button type="button" class="dialog-close" data-close-dialog="account-add-dialog" aria-label="关闭新增账号弹窗">×</button></div>
-    <p class="hint">可保存当前 Pi OAuth，或从 Pi 机器上的 JSON 文件导入；不会上传或展示 token。</p>
-    <form id="account-save-form" class="account-row"><label for="account-name">保存当前 OAuth 为</label><input id="account-name" name="name" placeholder="例如 pro" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><button type="submit" class="button-primary">保存账号</button></form>
+    <p class="hint">仅管理此卡片的服务。先在 Pi 使用 <code id="account-login-command">/login openai-codex</code> 登录，再保存当前 OAuth；也可从 Pi 机器上的 JSON 文件导入，不上传或展示 token。</p>
+    <form id="account-save-form" class="account-row"><label for="account-name">保存当前 OAuth 为</label><input id="account-name" name="name" placeholder="profile 名称（可留空自动生成）" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64"><button type="submit" class="button-primary">保存账号</button></form>
     <form id="account-import-form" class="account-row"><label for="account-import-name">导入 profile</label><input id="account-import-name" placeholder="账号名称" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" maxlength="64" required><input id="account-import-path" aria-label="Pi 机器上的 OAuth JSON 路径" placeholder="Pi 机器上的 JSON 路径" required><button type="submit">导入账号</button></form>
     <p id="account-add-feedback" class="hint" role="status" aria-live="polite"></p>
   </dialog>
   <dialog id="account-manage-dialog" aria-labelledby="account-manage-title">
     <div class="dialog-heading"><h3 id="account-manage-title">管理账号</h3><button type="button" class="dialog-close" data-close-dialog="account-manage-dialog" aria-label="关闭管理账号弹窗">×</button></div>
-    <p class="hint">只能删除非当前账号的保存凭据；历史用量仍保留。</p>
+    <p class="hint">备注仅用于识别，留空时显示邮箱或账号短 ID。删除保存凭据不会删除历史账号或用量。</p>
+    <form id="account-note-form"><label for="account-note-target">账号备注</label><select id="account-note-target"></select><div class="account-row"><input id="account-note" aria-label="账号备注" maxlength="120" placeholder="工作号、备用号；留空恢复默认名称"><button id="account-note-submit" type="submit">保存备注</button></div></form>
     <div class="account-row"><label for="account-manage-profile">已保存账号</label><select id="account-manage-profile"></select><button id="account-delete" class="button-danger" type="button">删除 profile</button></div>
     <p id="account-manage-feedback" class="hint" role="status" aria-live="polite"></p>
   </dialog>
@@ -168,11 +193,11 @@
     <div class="dialog-heading"><h3 id="account-history-title">历史记录</h3><button type="button" class="dialog-close" data-close-dialog="account-history-dialog" aria-label="关闭历史记录弹窗">×</button></div>
     <label for="backup-location">备份位置</label>
     <div class="account-row"><select id="backup-location"><option value="default">插件私有目录（默认）</option><option value="custom">指定 Pi 机器上的目录</option></select><input id="backup-directory" aria-label="Pi 机器上的备份目录绝对路径" placeholder="Pi 机器上的私有目录绝对路径" hidden><button id="account-backup-create" class="button-primary" type="button">创建备份</button></div>
-    <p class="hint">自定义目录须已存在且权限为 0700；备份文件包含 OAuth token，权限为 0600。不要选择共享目录。</p>
+    <p class="hint">手动备份与恢复包含所有服务的账号、凭据和账本，不限于此卡片。自定义目录须已存在且权限为 0700；备份文件包含 OAuth token，权限为 0600。不要选择共享目录。</p>
     <div class="account-row"><label for="account-backup">默认目录备份</label><select id="account-backup"></select><button id="account-restore" type="button">恢复备份</button></div>
     <div class="account-row"><label for="backup-restore-path">其他位置备份</label><input id="backup-restore-path" placeholder="Pi 机器上的备份文件绝对路径"><button id="account-restore-path" type="button">从路径恢复</button></div>
-    <div class="account-row"><label for="account-reset-profile">重置账号用量</label><select id="account-reset-profile"></select><button id="account-reset-usage" class="button-danger" type="button">重置本地用量</button></div>
-    <p class="hint">自动备份及用量重置仍保存到插件私有目录。重置仅影响本地用量，不会重置 OpenAI 实际额度。</p>
+    <div class="account-row"><label for="account-reset-profile">重置此服务的账号用量</label><select id="account-reset-profile"></select><button id="account-reset-usage" class="button-danger" type="button">重置本地用量</button></div>
+    <p class="hint">用量删除/重置的自动备份不含 OAuth 凭据。手动账号备份包含凭据。重置只影响所选账号的本地用量，不会重置服务商实际额度。</p>
     <p id="history-feedback" class="hint" role="status" aria-live="polite"></p>
   </dialog>
 </body>

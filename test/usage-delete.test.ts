@@ -39,7 +39,7 @@ it("deletes just the selected model/account records, updates both ledger views, 
   const proView = new UsageAggregator(undefined, "pro");
   await overall.refresh(); await proView.refresh();
   expect(overall.state().records).toBe(4);
-  expect(proView.state().records).toBe(2);
+  expect(proView.state().records).toBe(1);
   const result = await deleteModelUsage("openai-codex", "gpt-6-sol", "pro");
   expect(result.removed).toBe(1);
   expect(result.backup).toContain("backup-");
@@ -48,7 +48,7 @@ it("deletes just the selected model/account records, updates both ledger views, 
   expect(Object.values(backup.ledgers).join("\n")).toContain('"accountId":"pro"');
   await overall.refresh(); await proView.refresh();
   expect(overall.state()).toMatchObject({ records: 3, totals: { totalTokens: 36 }, pricing: { pricedRecords: 3 } });
-  expect(proView.state()).toMatchObject({ records: 1, totals: { totalTokens: 12 } });
+  expect(proView.state()).toMatchObject({ records: 0, totals: { totalTokens: 0 } });
   expect(overall.state().timeline.days.reduce((sum, item) => sum + item.totalTokens, 0)).toBe(36);
   expect(proView.estimateCostForPeriod("openai-codex", Date.now() - 60_000).totalTokens).toBe(0);
   expect((await readFile(file, "utf8"))).not.toContain('"accountId":"pro"');
@@ -66,7 +66,8 @@ it("removes unattributed CLI child receipts without guessing their model or re-a
   const retained = row("openai-codex", "gpt-6-sol", { accountId: "pro" });
   await appendUsage(deleted); await appendUsage(another); await appendUsage(retained);
   const scoped = await deleteModelUsage("subagent-unattributed", "unknown-subagent", "pro");
-  expect(scoped.removed).toBe(2); // Shared rows are not account-scoped.
+  expect(scoped.removed).toBe(0); // Unknown child identities never belong to a parent account.
+  expect((await deleteModelUsage("subagent-unattributed", "unknown-subagent", { type: "unassigned" })).removed).toBe(2);
   expect((await readFile(file, "utf8"))).toContain("gpt-6-sol");
   expect((await readFile(join(configDirectory(), "usage-deletions.json"), "utf8"))).not.toContain("run-a"); // Hashes, not session paths.
   expect(await appendUsage(deleted)).toBe(false);

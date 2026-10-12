@@ -14,6 +14,10 @@ export const DEFAULT_CONFIG: MonitorConfig = {
   showAgyInStatusbar: true,
   showClaudeInStatusbar: true,
   showGrokInStatusbar: true,
+  showCodexCard: true,
+  showClaudeCard: true,
+  showGrokCard: true,
+  showAgyCard: true,
 };
 
 export function configDirectory(): string {
@@ -47,6 +51,11 @@ export function normalizeConfig(value: unknown): MonitorConfig {
     showAgyInStatusbar: typeof record.showAgyInStatusbar === "boolean" ? record.showAgyInStatusbar : DEFAULT_CONFIG.showAgyInStatusbar,
     showClaudeInStatusbar: typeof record.showClaudeInStatusbar === "boolean" ? record.showClaudeInStatusbar : DEFAULT_CONFIG.showClaudeInStatusbar,
     showGrokInStatusbar: typeof record.showGrokInStatusbar === "boolean" ? record.showGrokInStatusbar : DEFAULT_CONFIG.showGrokInStatusbar,
+    // Card visibility is independent of collection, login state and Pi's statusbar switches.
+    showCodexCard: typeof record.showCodexCard === "boolean" ? record.showCodexCard : DEFAULT_CONFIG.showCodexCard,
+    showClaudeCard: typeof record.showClaudeCard === "boolean" ? record.showClaudeCard : DEFAULT_CONFIG.showClaudeCard,
+    showGrokCard: typeof record.showGrokCard === "boolean" ? record.showGrokCard : DEFAULT_CONFIG.showGrokCard,
+    showAgyCard: typeof record.showAgyCard === "boolean" ? record.showAgyCard : DEFAULT_CONFIG.showAgyCard,
   };
 }
 

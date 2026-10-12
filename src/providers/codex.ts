@@ -59,6 +59,8 @@ export async function queryCodexQuota(
     headers.set("Authorization", `Bearer ${auth.apiKey}`);
   }
   if (!headers.has("Authorization")) throw new Error("Codex OAuth credentials unavailable.");
+  const scope = Object.entries(auth.headers ?? {}).find(([name]) => name.toLowerCase() === "chatgpt-account-id")?.[1];
+  if (typeof scope === "string" && /^[A-Za-z0-9._:-]{1,256}$/.test(scope)) headers.set("ChatGPT-Account-Id", scope);
   const payload = await fetchJsonObject(USAGE_URL, { headers }, { signal, timeoutMs });
   return parseCodexQuota(payload);
 }

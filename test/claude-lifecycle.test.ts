@@ -59,7 +59,7 @@ it("uses only the active native OAuth login, clears switched quota, and attribut
     await commands.get("quota-console")?.("", ctx);
     const url = notices.find((item) => item.includes("http://127.0.0.1:"))?.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
     expect(url).toBeDefined();
-    await fire("before_provider_headers");
+    await fire("before_provider_headers", { headers: { Authorization: "Bearer oauth-a" } });
     await fire("message_end", { message: { role: "assistant", provider: "anthropic", model: "claude-sonnet-4-6", timestamp: Date.now(), stopReason: "stop",
       usage: { input: 100, output: 10, reasoning: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 110 } } });
     await writeFile(authPath, JSON.stringify(login("oauth-b")));

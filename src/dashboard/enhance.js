@@ -177,15 +177,4 @@
     sections.forEach((s) => s && io.observe(s));
   }
 
-  // 7. Account and ledger share one menu.
-  const menu = document.getElementById("account-menu");
-  if (menu) {
-    document.addEventListener("click", (e) => { if (menu.open && !menu.contains(e.target)) menu.open = false; });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && menu.open) { menu.open = false; menu.querySelector("summary")?.focus(); } });
-    menu.querySelectorAll(".account-actions button").forEach((b) => b.addEventListener("click", () => { menu.open = false; }));
-    document.getElementById("usage-account")?.addEventListener("change", () => {
-      menu.open = false;
-      menu.querySelector("summary")?.focus();
-    });
-  }
 })();

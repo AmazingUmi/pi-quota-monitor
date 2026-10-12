@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UsageAggregator } from "../src/tokens/aggregate.js";
@@ -98,6 +98,29 @@ it("sums per-record API-price estimates and keeps unknown models unpriced", asyn
   expect(restarted.state().pricing).toEqual(pricing);
 });
 
+it("backfills old GPT-6.1 Sol costs consistently across scopes and trends, without rewriting rows or replacing frozen amounts", async () => {
+  const dir = await fixture(), timestamp = Date.now() - 60_000, usageDay = localDate(timestamp);
+  const path = join(dir, `usage-${usageDay}.jsonl`);
+  const usage = { timestamp, provider: "openai-codex", model: "gpt-6.1-sol", accountId: "pro",
+    input: 100_000, output: 100_000, reasoning: 50_000, cacheRead: 150_000, cacheWrite: 22_000, totalTokens: 372_000, pricingAsOf: "2026-09-25" };
+  const original = [usage, { ...usage, timestamp: timestamp + 1, estimatedCostUsd: 7 },
+    { ...usage, timestamp: timestamp + 2, provider: "openai" }, { ...usage, timestamp: timestamp + 3, model: "unknown-model" }].map(line).join("");
+  await writeFile(path, original);
+  const all = new UsageAggregator(dir), account = new UsageAggregator(dir, "pro");
+  await all.refresh(); await account.refresh();
+  expect(all.state().pricing).toMatchObject({ pricedRecords: 3, unpricedRecords: 1, unpricedTokens: 372_000 });
+  expect(all.state().pricing.estimatedCostUsd).toBeCloseTo(9.54);
+  expect(account.state().pricing).toMatchObject({ pricedRecords: 2, unpricedRecords: 1 });
+  expect(account.state().pricing.estimatedCostUsd).toBeCloseTo(8.27);
+  expect(all.state().totals.totalTokens).toBe(372_000 * 4);
+  for (const period of ["hours", "days"] as const) {
+    expect(all.state().timeline[period].reduce((sum, row) => sum + row.estimatedCostUsd, 0)).toBeCloseTo(9.54);
+    expect(account.state().timeline[period].reduce((sum, row) => sum + row.estimatedCostUsd, 0)).toBeCloseTo(8.27);
+  }
+  await all.refresh(); expect(all.state().pricing.estimatedCostUsd).toBeCloseTo(9.54);
+  expect(await readFile(path, "utf8")).toBe(original);
+});
+
 it("keeps hourly and daily cost trends aligned with accountId-filtered usage", async () => {
   const dir = await fixture();
   const timestamp = Date.now() - 60_000;
@@ -117,25 +140,25 @@ it("keeps hourly and daily cost trends aligned with accountId-filtered usage", a
   const other = new UsageAggregator(dir, "other-id");
   const legacy = new UsageAggregator(dir, null);
   for (const aggregator of [obr, other, legacy]) await aggregator.refresh();
-  expect([obr.state().records, other.state().records, legacy.state().records]).toEqual([3, 2, 2]);
+  expect([obr.state().records, other.state().records, legacy.state().records]).toEqual([2, 1, 1]);
   for (const period of ["hours", "days"] as const) {
     const cost = (view: UsageAggregator) => view.state().timeline[period].reduce((sum, item) => sum + item.estimatedCostUsd, 0);
-    expect(cost(obr)).toBeCloseTo(4.3);
-    expect(cost(other)).toBeCloseTo(4.3);
-    expect(cost(legacy)).toBeCloseTo(4.3);
+    expect(cost(obr)).toBeCloseTo(4);
+    expect(cost(other)).toBeCloseTo(4);
+    expect(cost(legacy)).toBeCloseTo(4);
     expect(obr.state().timeline[period].filter((item) => item.provider === "openai-codex")
       .reduce((sum, item) => sum + item.unpricedRecords, 0)).toBe(1);
   }
-  expect(obr.state().pricing).toMatchObject({ estimatedCostUsd: 4.3, pricedRecords: 2, unpricedRecords: 1 });
-  expect(obr.state().totals.totalTokens).toBe(3_000_000);
+  expect(obr.state().pricing).toMatchObject({ estimatedCostUsd: 4, pricedRecords: 1, unpricedRecords: 1 });
+  expect(obr.state().totals.totalTokens).toBe(2_000_000);
   expect(obr.estimateCostForPeriod("openai-codex", timestamp - 1, timestamp + 1).estimatedCostUsd).toBe(4);
   await obr.refresh();
-  expect(obr.state().timeline.hours.reduce((sum, item) => sum + item.estimatedCostUsd, 0)).toBeCloseTo(4.3);
+  expect(obr.state().timeline.hours.reduce((sum, item) => sum + item.estimatedCostUsd, 0)).toBeCloseTo(4);
   await appendFile(join(dir, `usage-${usageDay}.jsonl`), line(record("openai-codex", "gpt-6-sol", "other-id")));
   await obr.refresh();
   await other.refresh();
-  expect(obr.state().pricing.estimatedCostUsd).toBeCloseTo(4.3);
-  expect(other.state().timeline.hours.reduce((sum, item) => sum + item.estimatedCostUsd, 0)).toBeCloseTo(8.3);
+  expect(obr.state().pricing.estimatedCostUsd).toBeCloseTo(4);
+  expect(other.state().timeline.hours.reduce((sum, item) => sum + item.estimatedCostUsd, 0)).toBeCloseTo(8);
 });
 
 it("aggregates priced and unpriced provider costs within exact quota-period boundaries", async () => {

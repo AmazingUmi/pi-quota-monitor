@@ -4,14 +4,21 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { isAbsolute } from "node:path";
 import type { UsageSummary } from "./tokens/aggregate.js";
+import { ACCOUNT_PROVIDERS, isAccountProvider, type AccountProvider } from "./account-identity.js";
+
+export interface DashboardAccount { id: string; name: string; provider?: string; key?: string; note?: string; email?: string; organization?: string; plan?: string; active?: boolean }
+export interface DashboardProfile { name: string; accountId?: string; provider?: AccountProvider; key?: string; displayName?: string; current?: boolean }
+export interface DashboardCurrentAccount { id: string; name: string; profile?: string; current?: boolean }
 import { PRICE_TABLE } from "./tokens/pricing.js";
 import { checkDashboardPort, DASHBOARD_HOST as HOST, DEFAULT_DASHBOARD_PORT, isDashboardPort, portErrorMessage } from "./dashboard-port.js";
-import type { AntigravityQuota, ClaudeQuota, CodexQuota, GrokQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
+import type { AntigravityQuota, CardVisibilitySettings, ClaudeQuota, CodexQuota, GrokQuota, MonitorConfig, ProviderCache, QuotaAmountEstimates, TokenTotals } from "./types.js";
 
 export interface DashboardState {
-  accounts?: Array<{ id: string; name: string }>;
+  accounts?: DashboardAccount[];
   currentProfile?: string;
-  profiles?: Array<{ name: string; accountId: string }>;
+  profiles?: DashboardProfile[];
+  currentAccounts?: Partial<Record<AccountProvider, DashboardCurrentAccount>>;
+  quotaAccounts?: Partial<Record<AccountProvider, DashboardCurrentAccount>>;
   backups?: string[];
   accountNotice?: { message: string; level: "info" | "warning" | "error"; at: number };
   selectedAccountId?: string;
@@ -34,9 +41,22 @@ export interface DashboardActions {
   refresh(): Promise<void>;
   setInterval(seconds: number): Promise<void>;
   setPort(port: number): Promise<void>;
+  setCards?(settings: CardVisibilitySettings): Promise<void>;
   setStatusbar(settings: Partial<Pick<MonitorConfig, "showOaiInStatusbar" | "showClaudeInStatusbar" | "showAgyInStatusbar" | "showGrokInStatusbar">>): Promise<void>;
 }
 
+function publicAccounts(accounts?: DashboardAccount[]): DashboardAccount[] | undefined {
+  return accounts?.map(({ id, name, provider, key, note, email, organization, plan, active }) => ({ id, name, provider, key, note, email, organization, plan, active }));
+}
+function publicProfiles(profiles?: DashboardProfile[]): DashboardProfile[] | undefined {
+  return profiles?.map(({ name, accountId, provider, key, displayName, current }) => ({ name, accountId, provider, key, displayName, current }));
+}
+function publicCurrent(accounts?: Partial<Record<AccountProvider, DashboardCurrentAccount>>) {
+  return accounts && Object.fromEntries(ACCOUNT_PROVIDERS.flatMap((p) => {
+    const a = accounts[p];
+    return a ? [[p, { id: a.id, name: a.name, profile: a.profile, current: a.current }]] : [];
+  }));
+}
 function publicTotals(totals: TokenTotals): TokenTotals {
   const { input, output, reasoning, cacheRead, cacheWrite, totalTokens } = totals;
   return { input, output, reasoning, cacheRead, cacheWrite, totalTokens };
@@ -170,7 +190,7 @@ export class QuotaDashboard {
       } else if (pathname === "/favicon.svg") {
         reply(res, 200, assets.icon.toString("utf8"), "image/svg+xml; charset=utf-8");
       } else if (pathname === "/api/state") {
-        const { accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok, antigravity, usage, context, quotaEstimates, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
+        const { accounts, currentProfile, profiles, currentAccounts, quotaAccounts, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok, antigravity, usage, context, quotaEstimates, config, updatedAt } = await this.actions.state(new URL(req.url ?? "/", origin).searchParams.get("account") ?? undefined);
         const summary = {
           totals: publicTotals(usage.totals),
           models: usage.models.map((item) => ({ provider: item.provider, model: item.model, ...publicTotals(item),
@@ -191,12 +211,14 @@ export class QuotaDashboard {
           },
           updatedAt: usage.updatedAt, stale: usage.stale, error: usage.error,
         };
-        reply(res, 200, JSON.stringify({ accounts, currentProfile, profiles, backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok: grok ?? {}, antigravity, usage: summary,
+        reply(res, 200, JSON.stringify({ accounts: publicAccounts(accounts), currentProfile, profiles: publicProfiles(profiles), currentAccounts: publicCurrent(currentAccounts), quotaAccounts: publicCurrent(quotaAccounts), backups, accountNotice, selectedAccountId, currentAccountId, codex, claude, grok: grok ?? {}, antigravity, usage: summary,
           context: context ? { tokens: context.tokens, contextWindow: context.contextWindow, percent: context.percent } : null,
           quotaEstimates,
           dashboard: { port: Number(new URL(origin).port), ...(this.fallbackFrom !== undefined ? { fallbackFrom: this.fallbackFrom } : {}) },
           config: { dashboardPort: config.dashboardPort, refreshIntervalSeconds: config.refreshIntervalSeconds,
-            showOaiInStatusbar: config.showOaiInStatusbar, showClaudeInStatusbar: config.showClaudeInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar, showGrokInStatusbar: config.showGrokInStatusbar }, updatedAt, control: this.nonce }));
+            showOaiInStatusbar: config.showOaiInStatusbar, showClaudeInStatusbar: config.showClaudeInStatusbar, showAgyInStatusbar: config.showAgyInStatusbar, showGrokInStatusbar: config.showGrokInStatusbar,
+             showCodexCard: config.showCodexCard !== false, showClaudeCard: config.showClaudeCard !== false,
+             showGrokCard: config.showGrokCard !== false, showAgyCard: config.showAgyCard !== false }, updatedAt, control: this.nonce }));
       } else {
         reply(res, 404, JSON.stringify({ error: "Not found" }));
       }
@@ -213,7 +235,7 @@ export class QuotaDashboard {
       catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
       if (!body || typeof body !== "object" || Array.isArray(body)) { reply(res, 400, JSON.stringify({ error: "Invalid usage selection" })); return; }
       const { account, provider, model } = body as { account?: unknown; provider?: unknown; model?: unknown };
-      if (typeof account !== "string" || (account !== "all" && !/^account:.{1,256}$/.test(account))
+      if (typeof account !== "string" || (account !== "all" && account !== "other" && account !== "unassigned" && !/^(account|provider):[^\r\n\u0000]{1,256}$/.test(account))
         || typeof provider !== "string" || !provider || provider.length > 256
         || typeof model !== "string" || !model || model.length > 256) {
         reply(res, 400, JSON.stringify({ error: "Invalid usage selection" })); return;
@@ -233,16 +255,22 @@ export class QuotaDashboard {
       catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
       if (!body || typeof body !== "object" || Array.isArray(body)) { reply(res, 400, JSON.stringify({ error: "Invalid action" })); return; }
       const { command, args } = body as { command?: unknown; args?: unknown };
-      const allowed = new Set(["save", "import", "use", "delete", "backup", "restore", "reset-cache", "reset-usage"]);
-      if (typeof command !== "string" || !allowed.has(command) || typeof args !== "string" || args.length > 800 || /[\r\n\u0000]/.test(args)) {
+      const allowed = new Set(["save", "import", "use", "delete", "note", "backup", "restore", "reset-cache", "reset-usage"]);
+      if (typeof command !== "string" || !allowed.has(command) || typeof args !== "string" || args.length > 800 || /[\u0000-\u001f\u007f]/.test(args)) {
         reply(res, 400, JSON.stringify({ error: "Invalid account command" })); return;
       }
       const name = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}";
-      const valid = command === "save" || command === "use" || command === "delete" || command === "reset-usage"
-        ? new RegExp(`^${name}$`).test(args)
-        : command === "import" ? new RegExp(`^${name} \\S.*$`).test(args)
-          : command === "restore" ? args.trim() === args && args.length > 0
-            : command === "backup" ? args === "" || (isAbsolute(args) && args.trim() === args) : args === "";
+      const parts = args.split(/\s+/);
+      const providerPrefix = isAccountProvider(parts[0]) ? parts.shift()! : undefined;
+      const scopedArgs = providerPrefix ? args.slice(providerPrefix.length + 1) : args;
+      const valid = command === "save" ? scopedArgs === "" || new RegExp(`^${name}$`).test(scopedArgs)
+        : command === "reset-usage" ? new RegExp(`^(?:${name}|account:[a-f0-9]{64})$`).test(scopedArgs)
+          : command === "use" || command === "delete" ? new RegExp(`^${name}$`).test(scopedArgs)
+        : command === "note" ? /^(?:account:[a-f0-9]{64}|[A-Za-z0-9][A-Za-z0-9._-]{0,63})(?: [^\\r\\n\\u0000]{0,120})?$/.test(scopedArgs)
+          : command === "import" ? new RegExp(`^${name} \\S.*$`).test(scopedArgs)
+            : command === "restore" ? args.trim() === args && args.length > 0 && !providerPrefix
+              : command === "backup" ? !providerPrefix && (args === "" || (isAbsolute(args) && args.trim() === args))
+                : scopedArgs === "" || (command === "reset-cache" && isAccountProvider(args));
       if (!valid) { reply(res, 400, JSON.stringify({ error: "Invalid account arguments" })); return; }
       await this.actions.accountCommand(command, args);
     } else if (pathname === "/api/refresh") {
@@ -272,6 +300,20 @@ export class QuotaDashboard {
       if (!check.available) { reply(res, 409, JSON.stringify({ error: check.message })); return; }
       try { await this.actions.setPort(port); }
       catch { reply(res, 500, JSON.stringify({ error: "无法保存端口设置，原设置未更改。" })); return; }
+    } else if (pathname === "/api/cards") {
+      let body: unknown;
+      try { body = await readSmallJson(req); }
+      catch { reply(res, 400, JSON.stringify({ error: "Invalid JSON" })); return; }
+      const allowed = new Set(["showCodexCard", "showClaudeCard", "showGrokCard", "showAgyCard"]);
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        reply(res, 400, JSON.stringify({ error: "Invalid card settings" })); return;
+      }
+      const entries = Object.entries(body);
+      if (!entries.length || entries.some(([key, value]) => !allowed.has(key) || typeof value !== "boolean")) {
+        reply(res, 400, JSON.stringify({ error: "Card settings must contain boolean Codex/Claude/Grok/agy options" })); return;
+      }
+      if (!this.actions.setCards) { reply(res, 503, JSON.stringify({ error: "卡片显示设置暂不可用" })); return; }
+      await this.actions.setCards(Object.fromEntries(entries) as CardVisibilitySettings);
     } else if (pathname === "/api/statusbar") {
       let body: unknown;
       try { body = await readSmallJson(req); }

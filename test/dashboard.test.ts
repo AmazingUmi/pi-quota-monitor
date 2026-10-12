@@ -18,7 +18,8 @@ const state: DashboardState = {
   context: { tokens: 70720, contextWindow: 272000, percent: 26 },
   quotaEstimates: { codex: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, claude: { fiveHour: { note: "n/a" }, weekly: { note: "n/a" } }, antigravity: { groups: [] } },
   config: { dashboardPort: 38457, refreshIntervalSeconds: 180, staleAfterSeconds: 60, requestTimeoutSeconds: 10, showReset: true,
-    showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true },
+    showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true,
+    showCodexCard: true, showClaudeCard: true, showGrokCard: true, showAgyCard: true },
   updatedAt: Date.now(),
 };
 
@@ -62,19 +63,25 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(html).toContain("状态栏显示 GRK");
   expect(html).toContain('id="claude-windows"');
   expect(html).toContain('id="grok-windows"');
-  for (const id of ["account-use", "account-switch-dialog", "account-switch-profile", "account-switch-confirm",
-    "account-add", "account-manage", "account-history", "account-add-dialog", "account-manage-dialog", "account-history-dialog",
+  for (const id of ["account-switch-dialog", "account-switch-profile", "account-switch-confirm",
+    "account-add-dialog", "account-manage-dialog", "account-history-dialog",
     "account-save-form", "account-import-form", "account-manage-profile", "account-delete",
     "backup-location", "backup-directory", "backup-restore-path", "account-backup", "account-backup-create", "account-restore", "account-restore-path", "account-reset-profile", "account-reset-usage"]) {
     expect(html).toContain(`id="${id}"`);
   }
-  const controls = html.slice(html.indexOf('<details class="account-menu"'), html.indexOf('</div></details>'));
-  expect([...controls.matchAll(/<button[^>]+>([^<]+)<\/button>/g)].map((match) => match[1]))
-    .toEqual(["切换账号", "新增账号", "管理账号", "历史记录"]);
-  expect(controls).toContain('id="usage-account"');
-  expect(controls).toContain('id="account-current"');
-  expect(html.indexOf('id="usage-account"')).toBeLessThan(html.indexOf('id="overview-title"'));
-  expect(html.indexOf('id="account-current"')).toBeLessThan(html.indexOf('id="overview-title"'));
+  const controls = [...html.matchAll(/<details class="account-menu"[^>]*>([\s\S]*?)<\/details>/g)];
+  expect(controls).toHaveLength(3);
+  for (const [index, prefix] of ["codex", "claude", "grok"].entries()) {
+    expect(controls[index][0]).toContain(`id="${prefix}-account-menu"`);
+    expect([...controls[index][1].matchAll(/<button[^>]+>([^<]+)<\/button>/g)].map((match) => match[1]))
+      .toEqual(["切换账号", "新增账号", "管理账号", "历史记录"]);
+    expect(controls[index][1]).toContain(`id="${prefix}-account-current"`);
+    expect(controls[index][1]).not.toContain('id="usage-account"');
+  }
+  expect(html.slice(0, html.indexOf('<main'))).not.toContain('class="account-menu"');
+  expect(html).not.toContain('id="agy-account-menu"');
+  expect(html.indexOf('id="usage-account"')).toBeGreaterThan(html.indexOf('class="overview-card-header"'));
+  expect(html).toContain("备份与恢复包含所有服务");
   // Dialogs live outside the main data flow instead of adding clutter to the usage section.
   expect(html.indexOf('id="account-switch-dialog"')).toBeGreaterThan(html.indexOf('</main>'));
   expect(html).toContain('<option value="all">总体用量</option>');
@@ -129,7 +136,7 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   expect(JSON.stringify(payload)).not.toContain("/usage-");
   expect(JSON.stringify(payload)).not.toContain("/secret/");
   expect(JSON.stringify(payload)).not.toContain("credential");
-  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar", "showGrokInStatusbar"]);
+  expect(Object.keys(payload.config)).toEqual(["dashboardPort", "refreshIntervalSeconds", "showOaiInStatusbar", "showClaudeInStatusbar", "showAgyInStatusbar", "showGrokInStatusbar", "showCodexCard", "showClaudeCard", "showGrokCard", "showAgyCard"]);
   expect(payload.config).toMatchObject({ showOaiInStatusbar: true, showClaudeInStatusbar: true, showAgyInStatusbar: true, showGrokInStatusbar: true });
   expect(Object.keys(payload.usage)).toEqual(["totals", "models", "pricing", "records", "invalidRecords", "timeline", "updatedAt", "stale"]);
 
@@ -167,6 +174,32 @@ it("serves a loopback-only, credential-free dashboard and closes on shutdown", a
   await dashboard.stop();
   running.pop();
   await expect(fetch(`${origin}/api/state`)).rejects.toThrow();
+});
+
+it("validates and persists only same-origin boolean card preferences, independently of other actions", async () => {
+  const local = { ...state, config: { ...state.config, showClaudeInStatusbar: true, showCodexCard: true, showClaudeCard: true, showGrokCard: true, showAgyCard: true } };
+  const setCards = vi.fn(async (settings: object) => { Object.assign(local.config, settings); });
+  const refresh = vi.fn(async () => {}), setStatusbar = vi.fn(async () => {}), accountCommand = vi.fn(async () => {});
+  const dashboard = new QuotaDashboard({ state: () => local, refresh, setStatusbar, accountCommand,
+    setInterval: async () => {}, setPort: async () => {}, setCards });
+  running.push(dashboard);
+  const origin = await dashboard.start(0), { control } = await (await fetch(`${origin}/api/state`)).json();
+  const headers = { Origin: origin, "X-Quota-Control": control, "Content-Type": "application/json" };
+  const post = (body: unknown, h = headers) => fetch(`${origin}/api/cards`, { method: "POST", headers: h, body: JSON.stringify(body) });
+  expect((await post({ showClaudeCard: false }, { ...headers, Origin: "https://other.example" })).status).toBe(403);
+  expect((await post({ showClaudeCard: false }, { ...headers, "X-Quota-Control": "wrong" })).status).toBe(403);
+  for (const body of [null, [], {}, { showClaudeCard: "false" }, { showGrokCard: 0 }, { showCodexCard: false, arbitrary: true }, { showOaiInStatusbar: false }]) {
+    expect((await post(body)).status).toBe(400);
+  }
+  expect(setCards).not.toHaveBeenCalled();
+  expect((await post({ showClaudeCard: false, showGrokCard: false })).status).toBe(200);
+  expect(setCards).toHaveBeenCalledWith({ showClaudeCard: false, showGrokCard: false });
+  const saved = await (await fetch(`${origin}/api/state`)).json();
+  expect(saved.config).toMatchObject({ showCodexCard: true, showClaudeCard: false, showGrokCard: false, showAgyCard: true, showClaudeInStatusbar: true });
+  expect(refresh).not.toHaveBeenCalled(); expect(setStatusbar).not.toHaveBeenCalled(); expect(accountCommand).not.toHaveBeenCalled();
+  setCards.mockRejectedValueOnce(new Error("disk failure"));
+  expect((await post({ showClaudeCard: true })).status).toBe(500);
+  expect((await (await fetch(`${origin}/api/state`)).json()).config.showClaudeCard).toBe(false);
 });
 
 it("requires same-origin control and a bounded model selection before deleting usage", async () => {
@@ -214,13 +247,38 @@ it("queues only allowlisted account commands behind the dashboard control check"
   expect(accountCommand).toHaveBeenCalledWith("import", "plus /path with spaces.json");
   expect((await post({ command: "backup", args: "/private/backup dir" })).status).toBe(200);
   expect(accountCommand).toHaveBeenCalledWith("backup", "/private/backup dir");
+  for (const [command, args] of [["use", "anthropic same"], ["save", "xai"], ["note", `account:${"a".repeat(64)} 工作号`],
+    ["reset-usage", `account:${"b".repeat(64)}`], ["reset-cache", "anthropic"]]) {
+    expect((await post({ command, args })).status).toBe(200);
+    expect(accountCommand).toHaveBeenCalledWith(command, args);
+  }
   for (const body of [{ command: "unknown", args: "pro" }, { command: "use", args: "pro\n/other" },
     { command: "import", args: "pro" }, { command: "reset-usage", args: "../pro" },
-    { command: "backup", args: "relative/path" }]) {
+    { command: "backup", args: "relative/path" }, { command: "use", args: "agy work" },
+    { command: "note", args: `account:${"a".repeat(64)} ${"x".repeat(121)}` }, { command: "note", args: "pro unsafe\u001bnote" }]) {
     expect((await post(body)).status).toBe(400);
   }
   expect((await post({ command: "use", args: "pro" }, { ...headers, Origin: "https://evil.example" })).status).toBe(403);
-  expect(accountCommand).toHaveBeenCalledTimes(3);
+  expect(accountCommand).toHaveBeenCalledTimes(8);
+});
+
+it("allowlists account, profile and quota-owner metadata so credentials cannot reach the state endpoint", async () => {
+  const secret = "private-access-must-not-leak", id = `account:${"a".repeat(64)}`;
+  const dashboard = new QuotaDashboard({
+    state: () => ({ ...state,
+      accounts: [{ id, name: "Claude · 工作号", provider: "anthropic", access: secret } as any],
+      profiles: [{ name: "work", provider: "anthropic", credential: { access: secret, refresh: secret } } as any],
+      currentAccounts: { anthropic: { id, name: "Claude · 工作号", current: true, access: secret } as any },
+      quotaAccounts: { anthropic: { id, name: "Claude · 工作号", current: false, credential: { access: secret } } as any },
+    }), refresh: async () => {}, setInterval: async () => {}, setStatusbar: async () => {}, setPort: async () => {},
+  });
+  running.push(dashboard);
+  const origin = await dashboard.start(0), response = await (await fetch(`${origin}/api/state`)).text();
+  expect(response).not.toContain(secret);
+  const payload = JSON.parse(response);
+  expect(payload.profiles).toEqual([{ name: "work", provider: "anthropic" }]);
+  expect(payload.currentAccounts.anthropic).toEqual({ id, name: "Claude · 工作号", current: true });
+  expect(payload.quotaAccounts.anthropic).toEqual({ id, name: "Claude · 工作号", current: false });
 });
 
 it("labels the all-accounts view and hides active Codex quota in other ledger views", async () => {
